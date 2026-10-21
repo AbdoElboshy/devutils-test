@@ -346,6 +346,12 @@ function ToolEditor({ tool, categories, onClose, onSaved, onError }: {
   const list = (value: string[]) => value.join(", ");
   const unlist = (value: string) => value.split(",").map((v) => v.trim()).filter(Boolean);
 
+  const baseline = JSON.stringify({ id: tool.id, name: tool.name, slug: tool.slug, description: tool.description, longDescription: tool.longDescription, category: tool.category, keywords: tool.keywords, aliases: tool.aliases, related: tool.related, tags: tool.tags ?? [], featured: Boolean(tool.featured), visibility: (tool.visibility as ToolOverlay["visibility"]) ?? "published", order: tool.order ?? 0 });
+  const confirmClose = () => {
+    if (JSON.stringify(form) !== baseline && !window.confirm("You have unsaved edits. Discard them?")) return;
+    onClose();
+  };
+
   const save = async () => {
     setBusy(true); setErrors([]);
     try { await saveToolOverride(tool.id, form); await onSaved(`Saved ${tool.name}`); onClose(); }
@@ -364,7 +370,7 @@ function ToolEditor({ tool, categories, onClose, onSaved, onError }: {
           <h2 className="text-[15px] font-extrabold">Edit {tool.name}</h2>
           <p className="mt-0.5 font-mono text-[11.5px] text-zinc-400">{tool.id} — implementation id is fixed; metadata is editable</p>
         </div>
-        <button type="button" onClick={onClose} aria-label="Close editor" className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800"><X size={16} /></button>
+        <button type="button" onClick={confirmClose} aria-label="Close editor" className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800"><X size={16} /></button>
       </div>
 
       <div className="mt-3 grid gap-3 md:grid-cols-2">
@@ -397,7 +403,7 @@ function ToolEditor({ tool, categories, onClose, onSaved, onError }: {
       </p>
       <div className="mt-3 flex gap-2">
         <Btn variant="primary" onClick={() => { void save(); }} disabled={busy}>{busy ? "Saving…" : "Save changes"}</Btn>
-        <Btn onClick={onClose} disabled={busy}>Cancel</Btn>
+        <Btn onClick={confirmClose} disabled={busy}>Cancel</Btn>
       </div>
     </Panel>
   );
@@ -512,6 +518,12 @@ function CategoryEditor({ category, toolCount, onClose, onSaved, onError }: {
   const [form, setForm] = useState<CategoryOverlay>({ id: category.id, name: category.name, slug: category.slug, description: category.description, tagline: category.tagline, order: category.order ?? 0, enabled: category.enabled !== false });
   const [busy, setBusy] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
+  const baseline = JSON.stringify({ id: category.id, name: category.name, slug: category.slug, description: category.description, tagline: category.tagline, order: category.order ?? 0, enabled: category.enabled !== false });
+  const confirmClose = () => {
+    if (JSON.stringify(form) !== baseline && !window.confirm("You have unsaved edits. Discard them?")) return;
+    onClose();
+  };
+
   const save = async () => {
     setBusy(true); setErrors([]);
     try { await saveCategoryOverride(category.id, form); await onSaved(`Saved ${form.name}`); onClose(); }
@@ -522,7 +534,7 @@ function CategoryEditor({ category, toolCount, onClose, onSaved, onError }: {
     <Panel className="p-4">
       <div className="flex items-start justify-between gap-3">
         <div><h2 className="text-[15px] font-extrabold">Edit {category.name}</h2><p className="mt-0.5 font-mono text-[11.5px] text-zinc-400">{category.id} · {toolCount} tool(s) assigned</p></div>
-        <button type="button" onClick={onClose} aria-label="Close editor" className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X size={16} /></button>
+        <button type="button" onClick={confirmClose} aria-label="Close editor" className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X size={16} /></button>
       </div>
       <div className="mt-3 grid gap-3 md:grid-cols-2">
         <Field label="Name"><TextInput value={form.name ?? ""} onChange={(e) => setForm({ ...form, name: e.target.value })} maxLength={60} /></Field>
@@ -533,7 +545,7 @@ function CategoryEditor({ category, toolCount, onClose, onSaved, onError }: {
         <label className="flex items-center gap-2 pb-2 text-[13px]"><input type="checkbox" checked={form.enabled !== false} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} className="h-4 w-4 accent-emerald-600" /> Visible in navigation</label>
       </div>
       {errors.length > 0 && <div className="mt-3"><ErrorCallout title="Validation failed" message={errors.join(" · ")} /></div>}
-      <div className="mt-3 flex gap-2"><Btn variant="primary" onClick={() => { void save(); }} disabled={busy}>{busy ? "Saving…" : "Save category"}</Btn><Btn onClick={onClose} disabled={busy}>Cancel</Btn></div>
+      <div className="mt-3 flex gap-2"><Btn variant="primary" onClick={() => { void save(); }} disabled={busy}>{busy ? "Saving…" : "Save category"}</Btn><Btn onClick={confirmClose} disabled={busy}>Cancel</Btn></div>
     </Panel>
   );
 }
