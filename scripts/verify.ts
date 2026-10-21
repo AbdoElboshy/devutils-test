@@ -8,7 +8,6 @@ import {
   parseTimestamp, describeCron, nextCronRuns, humanToCron, diffLines,
   CASES, textStats, parseCron, expandIpv6, compressIpv6, asciiEncode, asciiDecode, utf8BytesEncode, utf8BytesDecode, isoWeekNumber,
 } from "../src/lib/engine";
-import * as x509 from "@peculiar/x509";
 import { cspBuild, robotsBuild, securityTxt, inspectPem, pemFormat } from "../src/lib/blueprints";
 import { inspectCertificateDocument } from "../src/lib/certificates";
 import { genPassword, genPassphrase, genToken, genUuid, genHex, passwordStrength, formatInZone, dateDiff, addToDate, businessDays, calcAge } from "../src/lib/engine";
@@ -330,35 +329,43 @@ eq("AWS search", searchTools("aws arn", 20).some((hit) => hit.tool.id === "aws-a
   eq("security.txt expires", sectxt.includes("Expires: 2030-01-01"), true);
 }
 
-// --- G2: PEM inspection + real certificate fixture (global WebCrypto + @peculiar/x509) ---
+// --- G2: real openssl-generated certificate fixture (v4) ---
+// Generated with: openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 3650 -subj /CN=DevUtils Test
 {
+  const PEM = [
+  "-----BEGIN CERTIFICATE-----",
+  "MIIDETCCAfmgAwIBAgIUC7QqspcxI9Cm9I+DeHW8wuy/lyQwDQYJKoZIhvcNAQEL",
+  "BQAwGDEWMBQGA1UEAwwNRGV2VXRpbHMgVGVzdDAeFw0yNjEwMjEyMDIzMzhaFw0z",
+  "NjEwMTgyMDIzMzhaMBgxFjAUBgNVBAMMDURldlV0aWxzIFRlc3QwggEiMA0GCSqG",
+  "SIb3DQEBAQUAA4IBDwAwggEKAoIBAQCrNDcFMkODlQ6qMJ4Fj+Sa/5MD6PMhLqyF",
+  "9Q44+ZQKjk6x1FhObm8d2Rc7OxpxyVMyHS5mTJPlxctBr/K2u+5sOWemyyW1djPo",
+  "xXJt28KHFya1FA/73wRAyByJKY+PwnGh4IKTV0hj03ewGPVaGOLeE2CVjMBcqGpw",
+  "DMZbApRZt3S3z9ltsTCM8jmSr6ClqGKHaQCbbNzXi91ghFAbsjtR4gdiqzSdX4DD",
+  "lc/ePI5rUQBPOhWEDHhxZ9ri0TAqzjImTJQDC4ee9cj/SRBpzwsQnWY4hCF44NPl",
+  "XVX6jPzFJVDcfqiCOjPPnVWIFN3yKPvI5JbTF6mvag5xK7edaVl1AgMBAAGjUzBR",
+  "MB0GA1UdDgQWBBR9unulqbTkXyUQlBRO4rCkNmKcrjAfBgNVHSMEGDAWgBR9unul",
+  "qbTkXyUQlBRO4rCkNmKcrjAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUA",
+  "A4IBAQChiLGxLVKxR3NnNIAcpEFDwTifw5+28mmBV1RsIK2J9r8DGN3PV8i9/9eV",
+  "NDoYAAQ0PNqc8jx8SrM36t24KTVCZ3hVANTRbaaXYAjlCg6bceh3yWK6G7FEmwBj",
+  "DBdCZoeQ0jTmHYVYCKvkJI+ZleDNpwgPuKUE2nopAiyofbEjEo7rW7xYfgruiaPK",
+  "PSYazv49vGIuSP8uo9bVQspOJIVnkGTdVsYrvOJUZw/LSo9wG4SWn4Y18lnW3vK2",
+  "yfNJ5npR9i8zdQELWx27b5VwRmfEL9zZASp7ZWcQBhsprCT6K5iyI92PxQG+wVS+",
+  "Gmb/IOXG8pp7tQwwroRruhg+/cSH",
+  "-----END CERTIFICATE-----",
+  ].join("\n");
   throws("pem missing block rejected", () => inspectPem("not a pem"));
   eq("pemFormat rewraps 64 cols", pemFormat("-----BEGIN TEST-----\nYQ==\n-----END TEST-----").split("\n").length, 3);
-  const provider = (x509 as unknown as { cryptoProvider?: { set(c: Crypto): void } }).cryptoProvider;
-  if (provider) provider.set(crypto);
-  const alg: RsaHashedKeyGenParams = { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256", publicExponent: new Uint8Array([1, 0, 1]), modulusLength: 2048 };
-  const keys = await crypto.subtle.generateKey(alg, false, ["sign", "verify"]) as CryptoKeyPair;
-  const cert = await x509.X509CertificateGenerator.createSelfSigned({
-    serialNumber: "01",
-    name: "CN=DevUtils Test",
-    notBefore: new Date(Date.now() - 86400000),
-    notAfter: new Date(Date.now() + 30 * 86400000),
-    signingAlgorithm: alg,
-    keys,
-    extensions: [],
-  });
-  const pem = cert.toString("pem");
-  const basic = inspectPem(pem);
+  const basic = inspectPem(PEM);
   eq("cert fixture DER size", basic.derBytes > 400, true);
-  const details = await inspectCertificateDocument(pem);
+  const details = await inspectCertificateDocument(PEM);
   eq("cert subject parsed", details.subject.includes("DevUtils Test"), true);
-  eq("cert issuer equals subject", details.issuer, details.subject);
-  eq("cert signature algorithm", details.signatureAlgorithm.includes("SHA-256"), true);
+  eq("cert issuer equals subject (self-signed)", details.issuer, details.subject);
+  eq("cert signature algorithm", details.signatureAlgorithm, "SHA-256 with RSA");
   eq("cert public key algorithm", details.publicKeyAlgorithm, "RSA");
   eq("cert notAfter in future", (details.notAfter ? new Date(details.notAfter).getTime() : 0) > Date.now(), true);
   eq("cert fingerprint format", /^[0-9A-F]{2}(:[0-9A-F]{2}){31}$/.test(details.fingerprintSha256), true);
-  throws("truncated pem rejected", () => inspectCertificateDocument(pem.slice(0, pem.length - 20)));
-  throws("mislabeled pem rejected", () => inspectCertificateDocument(pem.replace("CERTIFICATE", "PUBLIC KEY")));
+  eq("truncated pem rejected", await inspectCertificateDocument(PEM.slice(0, PEM.length - 20)).then(() => false, () => true), true);
+  eq("mislabeled pem rejected", await inspectCertificateDocument(PEM.replace("CERTIFICATE", "PUBLIC KEY")).then(() => false, () => true), true);
 }
 
 // --- G2: regex explain ---
@@ -373,7 +380,8 @@ eq("AWS search", searchTools("aws arn", 20).some((hit) => hit.tool.id === "aws-a
 // --- G2: JSON -> XML (pure string functions; xmlToJson needs DOMParser, browser-only) ---
 {
   const xml = jsonToXml('{"name":"api","port":8080}');
-  eq("json->xml root element", xml.startsWith("<root>"), true);
+  eq("json->xml starts with declaration", xml.startsWith("<?xml"), true);
+  eq("json->xml root element present", xml.includes("<root>"), true);
   eq("json->xml nested values", xml.includes("<name>api</name>"), true);
   eq("json->xml escapes entities", jsonToXml('{"a":"<b&c>"}').includes("&lt;"), true);
   throws("json->xml rejects invalid json", () => jsonToXml("{bad}"));
