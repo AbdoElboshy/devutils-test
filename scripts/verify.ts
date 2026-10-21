@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import {
   formatJson, minifyJson, sortJson, flattenJson, unflattenJson, queryJsonPath, queryJsonPointer, applyJsonPatch, applyJsonMergePatch,
-  jsonToYaml, yamlToJson, jsonToCsv, csvToJson, jsonToXml, xmlToJson, jsonToToml, tomlToJson, jsonToSchema,
+  jsonToYaml, yamlToJson, jsonToCsv, csvToJson, jsonToToml, tomlToJson, jsonToSchema,
   b64encode, b64decode, hexEncode, hexDecode, md5hex, sha1hex, sha3hex,
   decodeJwt, calcSubnet, splitSubnet, calcSupernet, numToSymbolic, symbolicToNum, umaskResult,
   parseTimestamp, describeCron, nextCronRuns, humanToCron, diffLines,
