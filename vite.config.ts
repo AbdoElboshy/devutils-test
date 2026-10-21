@@ -13,8 +13,18 @@ import { viteSingleFile } from "vite-plugin-singlefile";
  * - `build.target: "es2022"` and default `assetsInlineLimit: 100000000` (set by
  *   the singlefile plugin) keep everything inline.
  */
+const injectRuntimeConfigInDev = {
+  name: "devutils:runtime-config-dev",
+  apply: "serve",
+  transformIndexHtml(html: string) {
+    // In dev, nothing loads /runtime-config.js; inject it so window.__DEVUTILS_CONFIG__
+    // is set (same as the production gateway does). The Vite proxy serves it from the gateway.
+    return html.replace("</head>", '<script src="/runtime-config.js"></script></head>');
+  },
+};
+
 export default defineConfig({
-  plugins: [react(), tailwindcss(), viteSingleFile()],
+  plugins: [react(), tailwindcss(), injectRuntimeConfigInDev, viteSingleFile()],
   build: {
     target: "es2022",
   },

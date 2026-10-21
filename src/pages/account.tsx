@@ -77,7 +77,7 @@ export function AccountPage({ section, onNav }: { section: AccountSection; onNav
           {!auth.user.emailVerified && <UnverifiedBanner email={auth.user.email ?? ""} />}
           {loadingData ? <Panel className="p-6 text-sm text-zinc-500">Loading account data…</Panel> : (
             <>
-              {section === "dashboard" && <DashboardSection name={profile?.displayName || auth.user.displayName || auth.user.email || "developer"} favorites={favorites} workflows={workflows} presets={presets} recent={recent} usage={usage} audit={audit} onNav={onNav} />}
+              {section === "dashboard" && <><DashboardSection name={profile?.displayName || auth.user.displayName || auth.user.email || "developer"} favorites={favorites} workflows={workflows} presets={presets} recent={recent} usage={usage} audit={audit} onNav={onNav} /><DashboardCharts favorites={favorites} usage={usage} onNav={onNav} /></>}
               {section === "profile" && profile && <ProfileSection value={profile} email={auth.user.email ?? ""} emailVerified={auth.user.emailVerified} onSaved={load} />}
               {section === "favorites" && <FavoritesSection favorites={favorites} onNav={onNav} onChanged={load} />}
               {section === "workflows" && <WorkflowsSection workflows={workflows} onNav={onNav} onChanged={load} />}
@@ -221,4 +221,78 @@ function SettingsSection({ profile, onNav }: { profile: Profile | null; onNav: (
     <Panel className="p-5"><h2 className="text-[14px] font-extrabold">Privacy</h2><p className="mt-1 text-[13px] leading-relaxed text-zinc-500">Sensitive tool input is never synced. Account storage includes IDs, safe preset configuration, workflow definitions and privacy-safe usage counts only.</p><div className="mt-3 flex flex-wrap gap-2"><Check label="Remember recent tool IDs" checked={privacy.recentHistory} onChange={(value) => setPrivacy({ ...privacy, recentHistory: value })} /><Check label="Allow privacy-safe product analytics if configured" checked={privacy.analytics} onChange={(value) => setPrivacy({ ...privacy, analytics: value })} /></div><p className="mt-2 text-[12px] text-zinc-400">No analytics provider is currently configured. This preference never permits tool inputs to be collected.</p><Btn className="mt-3" onClick={() => { void savePreferences(); }}>Save preferences</Btn><Btn variant="ghost" className="mt-3" onClick={() => { void platform.recentTools.clear().then(() => setMessage("Recent tool IDs cleared.")); }}>Clear recent tool IDs</Btn></Panel>
     <Panel className="border-red-200 p-5 dark:border-red-900"><h2 className="text-[14px] font-extrabold text-red-700 dark:text-red-300">Delete account</h2><p className="mt-1 text-[12.5px] text-zinc-500">Permanently removes the authentication identity and cascades user-owned profile, favorites, workflows, presets, keys and usage data. This cannot be undone.</p><Field label="Type DELETE to confirm" className="mt-3"><TextInput value={deleteText} onChange={(event) => setDeleteText(event.target.value)} /></Field><Btn variant="danger" className="mt-2" disabled={deleteText !== "DELETE"} onClick={() => { if (deleteText === "DELETE" && window.confirm("Permanently delete your DevUtils account?")) void platform.auth.deleteAccount().then(() => onNav("/")); }}>Delete account permanently</Btn></Panel>
   </div>;
+}
+/* ---------- Dashboard visual charts (pure CSS, no dependencies) ---------- */
+
+function BarMeter({ label, value, max, tone, hint }: { label: string; value: number; max: number; tone: string; hint?: string }) {
+  const pct = max > 0 ? Math.round((value / max) * 100) : 0;
+  return (
+    <div>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[12px] font-medium text-zinc-600 dark:text-zinc-400">{label}</span>
+        <span className="font-mono text-[13px] font-bold tabular-nums">{value.toLocaleString()}</span>
+      </div>
+      <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+        <div className={cn("h-full rounded-full transition-all duration-700", tone)} style={{ width: `${pct}%` }} />
+      </div>
+      {hint && <p className="mt-1 text-[10.5px] text-zinc-400">{hint}</p>}
+    </div>
+  );
+}
+
+function DashboardCharts({ favorites, usage, onNav }: { favorites: Favorite[]; usage: UsageSummary; onNav: (route: string) => void }) {
+  const counts = { tool: 0, workflow: 0, integration: 0, category: 0 } as Record<string, number>;
+  favorites.forEach((favorite) => { counts[favorite.kind] = (counts[favorite.kind] ?? 0) + 1; });
+  const kindTotal = favorites.length || 1;
+  const kinds = [
+    { id: "tool", label: "Tools", tone: "bg-emerald-500" },
+    { id: "workflow", label: "Workflows", tone: "bg-sky-500" },
+    { id: "integration", label: "Integrations", tone: "bg-violet-500" },
+    { id: "category", label: "Categories", tone: "bg-amber-400" },
+  ];
+  const usageMax = Math.max(usage.toolRuns, usage.workflowRuns, usage.apiRequests, usage.integrationCalls, 1);
+  const hasUsage = usage.toolRuns + usage.workflowRuns + usage.apiRequests + usage.integrationCalls > 0;
+  const usageItems = [
+    { label: "Tool runs", value: usage.toolRuns, tone: "bg-emerald-500", hint: "Executions this month" },
+    { label: "Workflow runs", value: usage.workflowRuns, tone: "bg-sky-500" },
+    { label: "API requests", value: usage.apiRequests, tone: "bg-violet-500" },
+    { label: "Integration calls", value: usage.integrationCalls, tone: "bg-amber-400" },
+  ];
+  return (
+    <div className="mt-4 grid gap-4 md:grid-cols-2">
+      <Panel className="p-4">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-[14px] font-extrabold">Usage this month</h2>
+          <span className="rounded-full bg-zinc-100 px-2 py-0.5 font-mono text-[10.5px] font-semibold text-zinc-500 dark:bg-zinc-800">since {new Date(usage.periodStart).toLocaleDateString()}</span>
+        </div>
+        {hasUsage ? (
+          <div className="mt-3 space-y-3">{usageItems.map((item) => <BarMeter key={item.label} {...item} max={usageMax} />)}</div>
+        ) : <p className="mt-3 rounded-lg border border-dashed border-zinc-300 p-4 text-center text-[12.5px] text-zinc-500 dark:border-zinc-700">No usage recorded yet. Run any tool or workflow and it will appear here.</p>}
+      </Panel>
+      <Panel className="p-4">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-[14px] font-extrabold">Favorites mix</h2>
+          <button type="button" onClick={() => onNav("/account/favorites")} className="text-[12px] font-semibold text-emerald-600 hover:underline dark:text-emerald-400">View all &rarr;</button>
+        </div>
+        {favorites.length ? (
+          <>
+            <div className="mt-3 flex h-2.5 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800" role="img" aria-label="Favorites by kind">
+              {kinds.map((kind) => counts[kind.id] > 0 && (
+                <span key={kind.id} className={kind.tone} style={{ width: `${(counts[kind.id] / kindTotal) * 100}%` }} title={`${kind.label}: ${counts[kind.id]}`} />
+              ))}
+            </div>
+            <ul className="mt-3 grid grid-cols-2 gap-2">
+              {kinds.map((kind) => (
+                <li key={kind.id} className="flex items-center gap-2 text-[12.5px]">
+                  <span className={cn("h-2.5 w-2.5 rounded-sm", kind.tone)} />
+                  <span className="text-zinc-600 dark:text-zinc-400">{kind.label}</span>
+                  <span className="ml-auto font-mono font-bold tabular-nums">{counts[kind.id]}</span>
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : <p className="mt-3 rounded-lg border border-dashed border-zinc-300 p-4 text-center text-[12.5px] text-zinc-500 dark:border-zinc-700">Star a tool or workflow to build your mix.</p>}
+      </Panel>
+    </div>
+  );
 }

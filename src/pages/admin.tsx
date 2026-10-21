@@ -10,7 +10,7 @@ import {
   saveToolOverride, type AdminAnalytics, type AdminHealth, type AdminRegistry, type AuditEntry,
   type CategoryOverlay, type ToolOverlay,
 } from "../platform/admin-api";
-import { applyRegistryOverlays, loadRegistryOverlays } from "../lib/registry";
+import { applyRegistryOverlays, CATEGORIES, loadRegistryOverlays } from "../lib/registry";
 import { downloadFile } from "../lib/engine";
 import { Btn, ErrorCallout, Field, Panel, Select, Stat, TextInput, inputCls } from "../components/ui";
 import { AccountUnavailable } from "./auth";
@@ -129,6 +129,18 @@ function Overview({ registry, onNav }: { registry: AdminRegistry; onNav: (route:
   const draft = registry.tools.filter((t) => t.visibility === "draft").length;
   const archived = registry.tools.filter((t) => t.visibility === "archived").length;
   const overridden = registry.tools.filter((t) => t.updatedAt).length;
+  const total = registry.tools.length || 1;
+  const byCategory = useMemo(() => {
+    const map = new Map<string, number>();
+    registry.tools.forEach((tool) => map.set(tool.category, (map.get(tool.category) ?? 0) + 1));
+    return [...map.entries()].sort((a, b) => b[1] - a[1]);
+  }, [registry.tools]);
+  const categoryMax = byCategory[0]?.[1] ?? 0;
+  const visibility = [
+    { label: "Published", count: published, tone: "bg-emerald-500" },
+    { label: "Draft", count: draft, tone: "bg-amber-400" },
+    { label: "Archived", count: archived, tone: "bg-zinc-400" },
+  ];
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -137,12 +149,48 @@ function Overview({ registry, onNav }: { registry: AdminRegistry; onNav: (route:
         <Stat label="Draft / archived" value={`${draft} / ${archived}`} />
         <Stat label="Categories" value={String(registry.categories.length)} />
       </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        <Panel className="p-4">
+          <h2 className="text-[14px] font-extrabold">Visibility breakdown</h2>
+          <div className="mt-3 flex h-2.5 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800" role="img" aria-label="Visibility breakdown">
+            {visibility.map((item) => item.count > 0 && (
+              <span key={item.label} className={item.tone} style={{ width: `${(item.count / total) * 100}%` }} title={`${item.label}: ${item.count}`} />
+            ))}
+          </div>
+          <ul className="mt-3 space-y-1.5 text-[12.5px]">
+            {visibility.map((item) => (
+              <li key={item.label} className="flex items-center gap-2">
+                <span className={cn("h-2.5 w-2.5 rounded-sm", item.tone)} />
+                <span className="text-zinc-600 dark:text-zinc-400">{item.label}</span>
+                <span className="ml-auto font-mono font-bold tabular-nums">{item.count}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-[11px] text-zinc-400">{overridden} tool(s) carry administrator customizations.</p>
+        </Panel>
+        <Panel className="p-4">
+          <h2 className="text-[14px] font-extrabold">Tools per category</h2>
+          <ul className="mt-3 space-y-2">
+            {byCategory.map(([id, count]) => (
+              <li key={id}>
+                <div className="flex items-baseline justify-between gap-2 text-[12.5px]">
+                  <span className="font-medium">{CATEGORIES.find((c) => c.id === id)?.name ?? id}</span>
+                  <span className="font-mono text-zinc-500 tabular-nums">{count}</span>
+                </div>
+                <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+                  <div className="h-full rounded-full bg-emerald-500 transition-all duration-500" style={{ width: `${categoryMax ? (count / categoryMax) * 100 : 0}%` }} />
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      </div>
       <Panel className="p-4">
         <h2 className="text-[14px] font-extrabold">Configuration state</h2>
         <dl className="mt-2 divide-y divide-zinc-100 text-[13px] dark:divide-zinc-800">
           {[
-            ["Source of truth", "src/lib/registry.ts → registry.generated.json"],
-            ["Administrator overlays", overridden ? `${overridden} tool(s) customized` : "none — running base catalogue"],
+            ["Source of truth", "src/lib/registry.ts &rarr; registry.generated.json"],
+            ["Administrator overlays", overridden ? `${overridden} tool(s) customized` : "none - running base catalogue"],
             ["Implementation ids", `${registry.baseToolIds.length} (not editable; new tools require code)`],
             ["Visibility options", registry.visibilityOptions.join(", ")],
           ].map(([k, v]) => (
@@ -492,6 +540,8 @@ function CategoryEditor({ category, toolCount, onClose, onSaved, onError }: {
 
 /* ------------------------------ Analytics ------------------------------ */
 
+const DONUT_TONES = ["#10b981", "#0ea5e9", "#8b5cf6", "#f59e0b", "#f43f5e", "#14b8a6", "#6366f1", "#eab308", "#22d3ee", "#a3a3a3"];
+
 function Analytics() {
   const [days, setDays] = useState(30);
   const [data, setData] = useState<AdminAnalytics | null>(null);
@@ -503,6 +553,18 @@ function Analytics() {
   }, [days]);
   useEffect(() => { void load(); }, [load]);
   const max = data?.topTools[0]?.count ?? 0;
+  const totalCategory = data ? data.byCategory.reduce((sum, item) => sum + item.count, 0) : 0;
+  const donutStyle = useMemo(() => {
+    if (!data || totalCategory === 0) return undefined;
+    let offset = 0;
+    const stops: string[] = [];
+    data.byCategory.slice(0, 10).forEach((item, index) => {
+      const start = (offset / totalCategory) * 100;
+      offset += item.count;
+      stops.push(`${DONUT_TONES[index]} ${start}% ${(offset / totalCategory) * 100}%`);
+    });
+    return { background: `conic-gradient(${stops.join(", ")})` };
+  }, [data, totalCategory]);
 
   return (
     <div className="space-y-4">
@@ -518,31 +580,61 @@ function Analytics() {
             <Stat label="Registered users" value={String(data.registeredUsers)} />
             <Stat label={`New in ${data.windowDays}d`} value={String(data.newUsersInWindow)} />
             <Stat label="Workflow runs" value={String(data.workflowRuns)} />
-            <Stat label="Auth failures" value={String(data.authFailures)} />
+            <Stat label="Tool failures" value={String(data.toolFailures)} />
           </div>
           {!data.available.anonymousEvents && (
             <div className="flex gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-[12.5px] text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
               <AlertTriangle size={15} className="mt-0.5 shrink-0" />
-              <span>Anonymous product analytics are not being collected. Visitors must opt in via Settings → Privacy, so per-tool counters below reflect account usage only. This is an honest gap, not a zero.</span>
+              <span>Anonymous product analytics are not being collected. Visitors must opt in via Settings &rarr; Privacy, so per-tool counters below reflect account usage only. This is an honest gap, not a zero.</span>
             </div>
           )}
-          <Panel className="p-4">
-            <h2 className="text-[14px] font-extrabold">Tool usage</h2>
-            {data.topTools.length ? (
-              <ul className="mt-3 space-y-2">
-                {data.topTools.map((tool) => (
-                  <li key={tool.toolId}>
-                    <div className="flex items-baseline justify-between gap-2 text-[12.5px]">
-                      <span className="font-medium">{tool.name}</span><span className="font-mono text-zinc-500">{tool.count}</span>
+          <div className="grid gap-3 lg:grid-cols-[1fr_320px]">
+            <Panel className="p-4">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-[14px] font-extrabold">Top tools</h2>
+                {max > 0 && <span className="rounded-full bg-zinc-100 px-2 py-0.5 font-mono text-[10.5px] font-semibold text-zinc-500 dark:bg-zinc-800">peak {max}</span>}
+              </div>
+              {data.topTools.length ? (
+                <ul className="mt-3 space-y-2.5">
+                  {data.topTools.map((tool, index) => (
+                    <li key={tool.toolId}>
+                      <div className="flex items-baseline justify-between gap-2 text-[12.5px]">
+                        <span className="font-medium"><span className="mr-1.5 font-mono text-[10.5px] text-zinc-400">#{index + 1}</span>{tool.name}</span>
+                        <span className="font-mono text-zinc-500 tabular-nums">{tool.count} &middot; {max ? Math.round((tool.count / max) * 100) : 0}%</span>
+                      </div>
+                      <div className="mt-1 h-2 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+                        <div className="h-full rounded-full bg-gradient-to-r from-emerald-600 to-emerald-400 transition-all duration-700" style={{ width: `${max ? (tool.count / max) * 100 : 0}%` }} />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              ) : <p className="mt-2 text-[13px] text-zinc-500">No tool usage recorded in this window.</p>}
+            </Panel>
+            <Panel className="p-4">
+              <h2 className="text-[14px] font-extrabold">Usage by category</h2>
+              {totalCategory > 0 && donutStyle ? (
+                <div className="mt-3 flex items-center justify-center">
+                  <div className="relative flex h-36 w-36 items-center justify-center rounded-full" style={donutStyle} role="img" aria-label="Usage by category">
+                    <div className="flex h-24 w-24 flex-col items-center justify-center rounded-full bg-white dark:bg-zinc-950">
+                      <span className="font-mono text-lg font-extrabold tabular-nums">{totalCategory.toLocaleString()}</span>
+                      <span className="text-[10px] uppercase tracking-wide text-zinc-400">events</span>
                     </div>
-                    <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
-                      <div className="h-full rounded-full bg-emerald-500 transition-all duration-500" style={{ width: `${max ? (tool.count / max) * 100 : 0}%` }} />
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            ) : <p className="mt-2 text-[13px] text-zinc-500">No tool usage recorded in this window.</p>}
-          </Panel>
+                  </div>
+                </div>
+              ) : <p className="mt-2 text-[13px] text-zinc-500">No category usage recorded in this window.</p>}
+              {totalCategory > 0 && (
+                <ul className="mt-3 space-y-1.5 text-[12px]">
+                  {data.byCategory.slice(0, 10).map((item, index) => (
+                    <li key={item.categoryId} className="flex items-center gap-2">
+                      <span className="h-2.5 w-2.5 rounded-sm" style={{ background: DONUT_TONES[index] }} />
+                      <span className="text-zinc-600 dark:text-zinc-400">{CATEGORIES.find((c) => c.id === item.categoryId)?.name ?? item.categoryId}</span>
+                      <span className="ml-auto font-mono font-bold tabular-nums">{item.count}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Panel>
+          </div>
           <div className="grid gap-3 md:grid-cols-2">
             <Panel className="p-4">
               <h2 className="text-[14px] font-extrabold">Least used</h2>
@@ -550,8 +642,11 @@ function Analytics() {
             </Panel>
             <Panel className="p-4">
               <h2 className="text-[14px] font-extrabold">Failures</h2>
-              <div className="mt-2 grid grid-cols-2 gap-2"><Stat label="Tool errors" value={String(data.toolFailures)} /><Stat label="Auth errors" value={String(data.authFailures)} /></div>
-              <p className="mt-2 text-[11.5px] leading-relaxed text-zinc-500">Event names and identifiers only — never tool input, tokens, or payloads.</p>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <div className="rounded-xl border border-red-200 bg-red-50 p-3 dark:border-red-900/60 dark:bg-red-950/30"><p className="text-[11px] font-bold uppercase tracking-wide text-red-600 dark:text-red-300">Tool errors</p><p className="mt-1 font-mono text-xl font-extrabold tabular-nums text-red-700 dark:text-red-300">{data.toolFailures}</p></div>
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/60 dark:bg-amber-950/30"><p className="text-[11px] font-bold uppercase tracking-wide text-amber-600 dark:text-amber-300">Auth errors</p><p className="mt-1 font-mono text-xl font-extrabold tabular-nums text-amber-700 dark:text-amber-300">{data.authFailures}</p></div>
+              </div>
+              <p className="mt-2 text-[11.5px] leading-relaxed text-zinc-500">Event names and identifiers only - never tool input, tokens, or payloads.</p>
             </Panel>
           </div>
         </>

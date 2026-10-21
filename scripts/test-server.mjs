@@ -178,6 +178,13 @@ ok("enabled:false maps to draft visibility", () => {
   assert.equal(merged.tools.some((t) => t.id === "alpha"), false);
   assert.equal(merged.allTools.find((t) => t.id === "alpha").visibility, "draft");
 });
+ok("null override columns do not clobber base tool metadata", () => {
+  const merged = mergeToolRegistry(baseTools, [{ id: "alpha", name: null, category: null, description: null }], []);
+  const alpha = merged.allTools.find((t) => t.id === "alpha");
+  assert.equal(alpha.name, "Alpha");
+  assert.equal(alpha.category, "dev");
+  assert.equal(alpha.description, "d");
+});
 ok("database long_description overlays the frontend longDescription field", () => {
   const merged = mergeToolRegistry([{ id: "alpha", slug: "alpha", name: "Alpha", longDescription: "old text" }], [{ id: "alpha", long_description: "updated text" }], []);
   assert.equal(merged.allTools[0].longDescription, "updated text");

@@ -60,7 +60,6 @@ export function Header({ route, onNav, onOpenSearch }: { route: string; onNav: (
   const links = [
     { label: "Tools", path: "/tools" },
     { label: "Categories", path: "/categories" },
-    { label: "DevOps", path: "/categories/devops" },
     ...(isFeatureEnabled("workflows") ? [{ label: "Workflows", path: "/workflows" }] : []),
   ];
   return (

@@ -249,10 +249,12 @@ export function mergeToolRegistry(baseTools, toolOverrides = [], categoryOverrid
   const byId = new Map(toolOverrides.map((row) => [row.id, row]));
   const merged = baseTools.map((tool, index) => {
     const override = byId.get(tool.id) ?? {};
+    // NULL/undefined DB columns mean "not set" — never let them clobber base metadata.
+    const definedOverride = Object.fromEntries(Object.entries(override).filter(([, value]) => value !== null && value !== undefined));
     const visibility = override.visibility ?? (override.enabled === false ? "draft" : "published");
     return {
       ...tool,
-      ...override,
+      ...definedOverride,
       id: tool.id,
       longDescription: override.long_description ?? override.longDescription ?? tool.longDescription,
       route: override.slug && override.slug !== tool.slug ? `/tools/${override.slug}` : tool.route,
