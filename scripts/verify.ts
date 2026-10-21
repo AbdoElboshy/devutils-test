@@ -2,12 +2,16 @@
 import { createHash } from "node:crypto";
 import {
   formatJson, minifyJson, sortJson, flattenJson, unflattenJson, queryJsonPath, queryJsonPointer, applyJsonPatch, applyJsonMergePatch,
-  jsonToYaml, yamlToJson, jsonToCsv, csvToJson, jsonToToml, tomlToJson, jsonToSchema,
+  jsonToYaml, yamlToJson, jsonToCsv, csvToJson, jsonToToml, tomlToJson, jsonToSchema, formatSql, minifySql, explainRegex, jsonToXml, formatXml,
   b64encode, b64decode, hexEncode, hexDecode, md5hex, sha1hex, sha3hex,
   decodeJwt, calcSubnet, splitSubnet, calcSupernet, numToSymbolic, symbolicToNum, umaskResult,
   parseTimestamp, describeCron, nextCronRuns, humanToCron, diffLines,
   CASES, textStats, parseCron, expandIpv6, compressIpv6, asciiEncode, asciiDecode, utf8BytesEncode, utf8BytesDecode, isoWeekNumber,
 } from "../src/lib/engine";
+import * as x509 from "@peculiar/x509";
+import { cspBuild, robotsBuild, securityTxt, inspectPem, pemFormat } from "../src/lib/blueprints";
+import { inspectCertificateDocument } from "../src/lib/certificates";
+import { genPassword, genPassphrase, genToken, genUuid, genHex, passwordStrength, formatInZone, dateDiff, addToDate, businessDays, calcAge } from "../src/lib/engine";
 import { searchTools, TOOLS, CATEGORIES, applyRegistryOverlays, resetRegistry } from "../src/lib/registry";
 import { parseCurl, curlToPython, dockerRun, k8sDeployment, ERROR_DB, buildGrep } from "../src/lib/blueprints";
 import { searchDiscovery } from "../src/lib/search";
@@ -251,6 +255,141 @@ eq("AWS search", searchTools("aws arn", 20).some((hit) => hit.tool.id === "aws-a
   eq("registry reset restores base route", TOOLS.find((t) => t.id === "json")?.route, jsonTool.route);
   eq("registry reset restores all tools", TOOLS.length, baseCount);
   eq("registry reset restores category order", CATEGORIES.some((c) => c.id === "devops"), true);
+}
+
+
+
+// --- G1 (v2): dispatch coverage - every registry tool id must map to a component ---
+{
+  const DISPATCH_SWITCH = new Set([
+    "json", "regex", "code-format", "code-minify", "diff", "generators", "jsonschema", "errors", "logs", "api-schema",
+    "cloud", "infrastructure", "docker", "kubernetes", "terraform", "git", "cicd", "env", "cron",
+    "chmod", "linux-cmd", "ssh", "systemd", "subnet", "ip", "dns", "http", "curl", "ports",
+    "jwt", "hash", "secrets", "websec", "cert", "encode", "qr", "converter", "sql",
+    "text", "timestamp", "timezone", "datecalc",
+  ]);
+  const hasComponent = (id: string): boolean => {
+    if (id.startsWith("aws-") || id.startsWith("azure-") || id.startsWith("gcp-") || id.startsWith("gcloud-") || id === "cloud-cidr-planner" || id === "cloud-cli-converter") return true;
+    if (id === "grafana" || id.startsWith("grafana-")) return true;
+    if (id === "zabbix" || id.startsWith("zabbix-")) return true;
+    if (id === "prometheus" || id === "promql-formatter" || id.startsWith("prometheus-")) return true;
+    if (id === "loki" || id.startsWith("logql-") || id.startsWith("loki-label")) return true;
+    if (["monitoring", "resource-utilization-calculator", "availability-calculator", "observability", "error-budget-calculator", "percentile-helper"].includes(id)) return true;
+    if (["json-log-formatter", "log-cleaner", "log-level-extractor", "log-timestamp-normalizer", "stack-trace-formatter", "log-diff", "docker-log-formatter", "kubernetes-log-cleaner", "nginx-log-parser", "apache-log-parser", "syslog-parser"].includes(id)) return true;
+    return DISPATCH_SWITCH.has(id);
+  };
+  const unmapped = TOOLS.map((tool) => tool.id).filter((id) => !hasComponent(id));
+  eq("G1: every registry tool id maps to a component (v2)", unmapped.length, 0);
+  if (unmapped.length) console.log("  unmapped ids:", unmapped.join(", "));
+  console.log(`G1 info: registry tool count = ${TOOLS.length}`);
+  eq("G1: registry size within audit baseline (>=100)", TOOLS.length >= 100, true);
+}
+
+// --- G2: SQL format / minify ---
+{
+  const f = formatSql("select id from users where active = true");
+  eq("sql format starts with SELECT", f.startsWith("SELECT"), true);
+  eq("sql format majors on own lines", f.includes("\nFROM users") && f.includes("\nWHERE active = true"), true);
+  eq("sql format appends semicolon", f.trim().endsWith(";"), true);
+  eq("sql format preserves literal spacing", formatSql("select 'hello  world' as greeting").includes("'hello  world'"), true);
+  throws("sql format rejects empty", () => formatSql("   "));
+  eq("sql minify collapses whitespace", /\s{2,}/.test(minifySql("select    id\n  from     users")), false);
+  eq("sql minify preserves literals", minifySql("select * from t where name = 'a  b'").includes("'a  b'"), true);
+  eq("sql minify strips comments", minifySql("select 1 -- note").includes("--"), false);
+}
+
+// --- G2: secrets generators + strength ---
+{
+  const pw = genPassword(20);
+  eq("password length respected", pw.length, 20);
+  eq("password digits-only charset", /^[0-9]+$/.test(genPassword(12, { upper: false, lower: false, digits: true, symbols: false })), true);
+  throws("password with no charsets rejected", () => genPassword(12, { upper: false, lower: false, digits: false, symbols: false }));
+  eq("passphrase word count", genPassphrase(4).split("-").length, 4);
+  const hex = genHex(32);
+  eq("hex secret length", hex.length, 64);
+  eq("hex secret charset", /^[0-9a-f]{64}$/.test(hex), true);
+  eq("uuid shape", /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(genUuid()), true);
+  eq("token is base64url", /^[A-Za-z0-9_-]+$/.test(genToken(32)), true);
+  const strong = passwordStrength(genPassword(24, { upper: true, lower: true, digits: true, symbols: true }));
+  eq("strong password entropy >= 80 bits", strong.entropy >= 80, true);
+  eq("weak password scores low", passwordStrength("1234").score, 1);
+  eq("empty password scores low", passwordStrength("").score, 1);
+}
+
+// --- G2: CSP / robots / security.txt ---
+{
+  const csp = cspBuild({ defaultSrc: "'self'", script: "'self'", style: "'self'", img: "'self' data:", connect: "'self'", frame: "'none'", extra: "base-uri 'self'" });
+  eq("csp contains default-src", csp.includes("default-src 'self'"), true);
+  eq("csp ends with semicolon", csp.trim().endsWith(";"), true);
+  const robots = robotsBuild({ allow: "/\n/public", disallow: "/admin\n*.json", sitemap: "https://example.com/sitemap.xml" });
+  eq("robots user-agent first", robots.startsWith("User-agent: *"), true);
+  eq("robots disallow lines", robots.split("\n").filter((l) => l.startsWith("Disallow:")).length, 2);
+  eq("robots sitemap included", robots.includes("Sitemap: https://example.com/sitemap.xml"), true);
+  const sectxt = securityTxt({ contact: "mailto:sec@example.com", expires: "2030-01-01T00:00:00.000Z", policy: "" });
+  eq("security.txt contact", sectxt.startsWith("Contact: mailto:sec@example.com"), true);
+  eq("security.txt expires", sectxt.includes("Expires: 2030-01-01"), true);
+}
+
+// --- G2: PEM inspection + real certificate fixture (global WebCrypto + @peculiar/x509) ---
+{
+  throws("pem missing block rejected", () => inspectPem("not a pem"));
+  eq("pemFormat rewraps 64 cols", pemFormat("-----BEGIN TEST-----\nYQ==\n-----END TEST-----").split("\n").length, 3);
+  const provider = (x509 as unknown as { cryptoProvider?: { set(c: Crypto): void } }).cryptoProvider;
+  if (provider) provider.set(crypto);
+  const alg: RsaHashedKeyGenParams = { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256", publicExponent: new Uint8Array([1, 0, 1]), modulusLength: 2048 };
+  const keys = await crypto.subtle.generateKey(alg, false, ["sign", "verify"]) as CryptoKeyPair;
+  const cert = await x509.X509CertificateGenerator.createSelfSigned({
+    serialNumber: "01",
+    name: "CN=DevUtils Test",
+    notBefore: new Date(Date.now() - 86400000),
+    notAfter: new Date(Date.now() + 30 * 86400000),
+    signingAlgorithm: alg,
+    keys,
+    extensions: [],
+  });
+  const pem = cert.toString("pem");
+  const basic = inspectPem(pem);
+  eq("cert fixture DER size", basic.derBytes > 400, true);
+  const details = await inspectCertificateDocument(pem);
+  eq("cert subject parsed", details.subject.includes("DevUtils Test"), true);
+  eq("cert issuer equals subject", details.issuer, details.subject);
+  eq("cert signature algorithm", details.signatureAlgorithm.includes("SHA-256"), true);
+  eq("cert public key algorithm", details.publicKeyAlgorithm, "RSA");
+  eq("cert notAfter in future", (details.notAfter ? new Date(details.notAfter).getTime() : 0) > Date.now(), true);
+  eq("cert fingerprint format", /^[0-9A-F]{2}(:[0-9A-F]{2}){31}$/.test(details.fingerprintSha256), true);
+  throws("truncated pem rejected", () => inspectCertificateDocument(pem.slice(0, pem.length - 20)));
+  throws("mislabeled pem rejected", () => inspectCertificateDocument(pem.replace("CERTIFICATE", "PUBLIC KEY")));
+}
+
+// --- G2: regex explain ---
+{
+  const lines = explainRegex("^\\d{3}-\\d{4}$");
+  eq("regex explain start anchor", lines.some((l) => l.includes("start of string")), true);
+  eq("regex explain digit class", lines.some((l) => l.includes("any digit")), true);
+  eq("regex explain exact-count", lines.some((l) => l.includes("exact-count")), true);
+  eq("regex explain produces tokens", lines.length >= 4, true);
+}
+
+// --- G2: JSON -> XML (pure string functions; xmlToJson needs DOMParser, browser-only) ---
+{
+  const xml = jsonToXml('{"name":"api","port":8080}');
+  eq("json->xml root element", xml.startsWith("<root>"), true);
+  eq("json->xml nested values", xml.includes("<name>api</name>"), true);
+  eq("json->xml escapes entities", jsonToXml('{"a":"<b&c>"}').includes("&lt;"), true);
+  throws("json->xml rejects invalid json", () => jsonToXml("{bad}"));
+  eq("xml format indents", formatXml("<a><b>x</b></a>").includes("\n"), true);
+}
+
+// --- G2: timezone + date helpers ---
+{
+  eq("timezone berlin formats", formatInZone(new Date("2026-01-15T12:00:00Z"), "Europe/Berlin").length > 0, true);
+  throws("timezone invalid rejected", () => formatInZone(new Date(), "Mars/Olympus"));
+  const dd = dateDiff("2026-01-01", "2026-01-11");
+  eq("dateDiff days", dd.days, 10);
+  throws("dateDiff invalid rejected", () => dateDiff("nope", "2026-01-01"));
+  eq("addToDate adds month", addToDate("2026-01-15", 1, "months").getMonth(), 1);
+  eq("businessDays skips weekend", businessDays("2026-01-05", "2026-01-11"), 5);
+  eq("calcAge readable", /years/.test(calcAge("1990-06-15")), true);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -4,7 +4,7 @@ import { cspBuild, robotsBuild, securityTxt, inspectPem, pemFormat } from "../li
 import { inspectCertificateDocument, type CertificateDetails } from "../lib/certificates";
 import { TOOL_MAP } from "../lib/registry";
 import {
-  ToolScaffold, Panel, Tabs, Field, TextInput, Select, Check, Btn,
+  ToolScaffold, Panel, Tabs, Field, TextInput, Select, Check, Btn, CopyBtn,
   CodeArea, OutputBox, ErrorCallout, Split, ActionBar, Stat, inputCls,
 } from "../components/ui";
 import { cn } from "../utils/cn";
@@ -141,7 +141,7 @@ export function HashTool() {
                     <div key={a} className="rounded-xl border border-zinc-200 p-2.5 dark:border-zinc-800">
                       <div className="flex items-center justify-between">
                         <span className="font-mono text-[11.5px] font-bold text-zinc-500">{a}</span>
-                        <Btn variant="ghost" className="px-2 py-0.5 text-[11.5px]" onClick={() => { if (outs[a]) navigator.clipboard.writeText(outs[a]).catch(() => {}); }}>copy</Btn>
+                        <CopyBtn text={outs[a] ?? ""} label="copy" />
                       </div>
                       <p className="mt-1 break-all font-mono text-[12px] text-zinc-800 dark:text-zinc-200">{outs[a] ?? "…"}</p>
                     </div>
