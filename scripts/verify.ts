@@ -22,6 +22,7 @@ import { WORKFLOW_TEMPLATES } from "../src/data/workflows";
 import { capabilities, isFeatureEnabled } from "../src/platform/features";
 import { awsCliCommand, awsSecurityGroupRule, buildArn, buildIamPolicy, buildLogQl, buildPromQl, calculateMetric, calculateSlo, grafanaDashboard, grafanaTemplate, infrastructureName, parseArn, parseAzureResourceId, parseGcpResource, parseS3Url, percentile, prometheusRule, prometheusScrapeConfig, validateGrafanaDashboard, zabbixApiExample, zabbixExpression, zabbixItem, zabbixLinuxTemplate, zabbixTemplate, zabbixTrigger } from "../src/lib/devops-platform";
 import { AnonymousAuthProvider } from "../src/platform/auth";
+import { classifyRoute } from "../src/lib/routes";
 
 let pass = 0, fail = 0;
 function eq(name: string, a: unknown, b: unknown) {
@@ -398,6 +399,28 @@ eq("AWS search", searchTools("aws arn", 20).some((hit) => hit.tool.id === "aws-a
   eq("addToDate adds month", addToDate("2026-01-15", 1, "months").getMonth(), 1);
   eq("businessDays skips weekend", businessDays("2026-01-05", "2026-01-11"), 5);
   eq("calcAge readable", /years/.test(calcAge("1990-06-15")), true);
+}
+
+
+// --- P4: route classification (404 regression) ---
+{
+  const c = (r: string, w = true) => classifyRoute(r, w);
+  eq("routes: known tool route -> tool", c(TOOLS[0]!.route).kind, "tool");
+  eq("routes: home -> home", c("/").kind, "home");
+  eq("routes: tools index -> tools", c("/tools").kind, "tools");
+  eq("routes: workflows enabled -> workflows", c("/workflows", true).kind, "workflows");
+  eq("404: workflows disabled -> not-found", c("/workflows", false).kind, "not-found");
+  eq("routes: login -> auth", c("/login").kind, "auth");
+  const adminC = c("/admin/nonsense");
+  if (adminC.kind !== "admin") throw new Error("expected admin classification");
+  eq("routes: admin invalid section falls back to overview", adminC.section, "overview");
+  const accountC = c("/account/nonsense");
+  if (accountC.kind !== "account") throw new Error("expected account classification");
+  eq("routes: account invalid section falls back to dashboard", accountC.section, "dashboard");
+  eq("routes: known category -> category", c(`/categories/${CATEGORIES[0]!.slug}`).kind, "category");
+  eq("404: unknown category slug -> not-found", c("/categories/not-a-real-category").kind, "not-found");
+  eq("404: bogus route -> not-found", c("/no-such-tool-xyz").kind, "not-found");
+  eq("routes: about still resolves", c("/about").kind, "about");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

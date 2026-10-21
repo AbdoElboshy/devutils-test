@@ -30,7 +30,8 @@ import { CloudTool, InfrastructureTool } from "./tools/tool-observability";
 import { GrafanaStandaloneTool, LoggingStandaloneTool, LokiStandaloneTool, MonitoringStandaloneTool, PrometheusStandaloneTool, ZabbixStandaloneTool } from "./tools/tool-devops-standalone";
 import { CloudStandaloneTool } from "./tools/tool-cloud";
 import { AuthPage } from "./pages/auth";
-import { AccountPage, type AccountSection } from "./pages/account";
+import { AccountPage } from "./pages/account";
+import { classifyRoute } from "./lib/routes";
 
 /* ---------- route aliases (clean URLs) ---------- */
 const ALIASES: Record<string, string> = {
@@ -220,34 +221,21 @@ export default function App() {
 /* ================= router ================= */
 
 function RouteView({ route, onNav, onSearch }: { route: string; onNav: (p: string) => void; onSearch: () => void }) {
-  const tool = ROUTE_MAP[route];
-  if (tool) return <ToolView id={tool.id} />;
-  if (route === "/") return <Home onNav={onNav} onSearch={onSearch} />;
-  if (route === "/tools") return <AllTools onNav={onNav} />;
-  if (route === "/workflows" && isFeatureEnabled("workflows")) return <WorkflowsPage onNav={onNav} />;
-  if (route === "/login") return <AuthPage mode="login" onNav={onNav} />;
-  if (route === "/signup") return <AuthPage mode="signup" onNav={onNav} />;
-  if (route === "/forgot-password") return <AuthPage mode="forgot" onNav={onNav} />;
-  if (route === "/reset-password") return <AuthPage mode="reset" onNav={onNav} />;
-  if (route === "/verify-email") return <AuthPage mode="verify" onNav={onNav} />;
-  if (route === "/admin" || route.startsWith("/admin/")) {
-    const requested = route.split("/")[2] || "overview";
-    const valid = ["overview", "tools", "categories", "analytics", "audit", "health"];
-    type AdminSection = "overview" | "tools" | "categories" | "analytics" | "audit" | "health";
-    return <AdminPage section={valid.includes(requested) ? (requested as AdminSection) : "overview"} onNav={onNav} />;
+  const c = classifyRoute(route);
+  switch (c.kind) {
+    case "tool": return <ToolView id={c.id} />;
+    case "home": return <Home onNav={onNav} onSearch={onSearch} />;
+    case "tools": return <AllTools onNav={onNav} />;
+    case "workflows": return <WorkflowsPage onNav={onNav} />;
+    case "auth": return <AuthPage mode={c.mode} onNav={onNav} />;
+    case "admin": return <AdminPage section={c.section} onNav={onNav} />;
+    case "account": return <AccountPage section={c.section} onNav={onNav} />;
+    case "categories": return <AllCategories onNav={onNav} />;
+    case "category": return <CategoryPage slug={c.slug} onNav={onNav} />;
+    case "about": return <About />;
+    case "not-found": return <NotFound onSearch={onSearch} />;
+    default: return <NotFound onSearch={onSearch} />;
   }
-  if (route === "/account" || route.startsWith("/account/")) {
-    const requested = route.split("/")[2] || "dashboard";
-    const valid: AccountSection[] = ["dashboard", "profile", "favorites", "workflows", "presets", "api-keys", "usage", "billing", "security", "settings"];
-    return <AccountPage section={valid.includes(requested as AccountSection) ? requested as AccountSection : "dashboard"} onNav={onNav} />;
-  }
-  if (route === "/categories") return <AllCategories onNav={onNav} />;
-  if (route.startsWith("/categories/")) {
-    const cat = getCategory(route.split("/")[2]);
-    if (cat) return <CategoryPage slug={cat.slug} onNav={onNav} />;
-  }
-  if (route === "/about") return <About />;
-  return <NotFound onSearch={onSearch} />;
 }
 
 function ToolView({ id }: { id: string }) {
