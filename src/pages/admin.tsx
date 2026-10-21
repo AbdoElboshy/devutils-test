@@ -574,6 +574,7 @@ function Analytics() {
         {data && <p className="pb-2 font-mono text-[11px] text-zinc-400">collected {new Date(data.collectedAt).toLocaleString()}</p>}
       </Panel>
       {error && <ErrorCallout title="Analytics unavailable" message={error} hint="The dashboard never renders fabricated numbers when a query fails." />}
+      {!data && !error && <Panel className="p-8 text-center text-sm text-zinc-500">Loading analytics…</Panel>}
       {data && (
         <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -659,13 +660,24 @@ function Analytics() {
 
 function AuditLog() {
   const [rows, setRows] = useState<AuditEntry[] | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  useEffect(() => { fetchAdminAudit(80).then(setRows).catch((c: unknown) => setError(c instanceof Error ? c.message : "Audit unavailable.")); }, []);
+  const load = useCallback(() => {
+    setError("");
+    setLoading(true);
+    fetchAdminAudit(80)
+      .then(setRows)
+      .catch((c: unknown) => setError(c instanceof Error ? c.message : "Audit unavailable."))
+      .finally(() => setLoading(false));
+  }, []);
+  useEffect(() => { load(); }, [load]);
   return (
     <Panel className="p-4">
       <h2 className="text-[14px] font-extrabold">Audit log</h2>
       <p className="mt-1 text-[12.5px] text-zinc-500">Administrative and account events. Passwords, tokens, API keys, and tool input are never recorded.</p>
       {error && <div className="mt-3"><ErrorCallout title="Audit unavailable" message={error} /></div>}
+      {error && <div className="mt-3"><Btn onClick={load}>Retry</Btn></div>}
+      {loading && !error && <p className="mt-3 text-[13px] text-zinc-500">Loading audit events…</p>}
       {rows && (
         <div className="mt-3 max-h-[60vh] overflow-auto rounded-xl border border-zinc-200 dark:border-zinc-800">
           {rows.length ? rows.map((row) => (
@@ -697,6 +709,7 @@ function Health() {
         {data?.migrationRequired && <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11.5px] font-bold text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">migration required</span>}
       </Panel>
       {error && <ErrorCallout title="Health check failed" message={error} />}
+      {!data && !error && <Panel className="p-8 text-center text-sm text-zinc-500">Running health checks…</Panel>}
       {data && (
         <Panel className="overflow-hidden">
           <table className="w-full border-collapse text-left text-[13px]">
