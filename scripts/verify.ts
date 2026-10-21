@@ -13,7 +13,7 @@ import { inspectCertificateDocument } from "../src/lib/certificates";
 import { genPassword, genPassphrase, genToken, genUuid, genHex, passwordStrength, formatInZone, dateDiff, addToDate, businessDays, calcAge } from "../src/lib/engine";
 import { searchTools, TOOLS, CATEGORIES, applyRegistryOverlays, resetRegistry } from "../src/lib/registry";
 import { parseCurl, curlToPython, dockerRun, k8sDeployment, ERROR_DB, buildGrep } from "../src/lib/blueprints";
-import { searchDiscovery } from "../src/lib/search";
+import { searchDiscovery, suggestFallback } from "../src/lib/search";
 import { analyzeErrorText } from "../src/lib/error-explorer";
 import { deduplicateLogs, detectLogFormat, extractLogErrors, logSummary, normalizeLogTimestamps } from "../src/lib/logs";
 import { formatGraphql, openApiClientSkeleton, openApiToTypeScript, validateGraphql, validateOpenApi } from "../src/lib/api-schema";
@@ -421,6 +421,14 @@ eq("AWS search", searchTools("aws arn", 20).some((hit) => hit.tool.id === "aws-a
   eq("404: unknown category slug -> not-found", c("/categories/not-a-real-category").kind, "not-found");
   eq("404: bogus route -> not-found", c("/no-such-tool-xyz").kind, "not-found");
   eq("routes: about still resolves", c("/about").kind, "about");
+}
+
+
+// --- P4: search no-result suggestions ---
+{
+  eq("suggest: typo query returns suggestions", suggestFallback("jso").length > 0, true);
+  eq("suggest: json typo still suggests json tools", suggestFallback("jsn").some((h) => h.title.toLowerCase().includes("json")), true);
+  eq("suggest: pure gibberish returns none", suggestFallback("zzzzqqq").length, 0);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Search, Moon, Sun, Monitor, Menu, X, CornerDownLeft, Star, Clock, ChevronRight, Terminal, UserRound, LogOut, ShieldCheck } from "lucide-react";
 import { CATEGORIES, TOOLS } from "../lib/registry";
-import { searchDiscovery, toolDiscoveryHit, type DiscoveryHit } from "../lib/search";
+import { searchDiscovery, suggestFallback, toolDiscoveryHit, type DiscoveryHit } from "../lib/search";
 import { useFavorites, usePreferenceStorage, useRecents } from "./ui";
 import { cn } from "../utils/cn";
 import { isFeatureEnabled } from "../platform/features";
@@ -187,12 +187,13 @@ export function CommandPalette({ open, onClose, onNav }: { open: boolean; onClos
       if (!out.length) return searchDiscovery("", 8);
       return out;
     }
-    return searchDiscovery(q, 12);
+    const exact = searchDiscovery(q, 12);
+    return exact.length ? exact : suggestFallback(q, 5);
   }, [q, recents, favs]);
 
   useEffect(() => { setSel(0); }, [q ]);
   useEffect(() => {
-    if (!open || !q.trim() || hits.length) return;
+    if (!open || !q.trim() || (hits.length > 0 && hits.some((h) => h.reason !== "fuzzy suggestion"))) return;
     const timer = window.setTimeout(() => track({ name: "search_used", outcome: "failure" }), 1200);
     return () => window.clearTimeout(timer);
   }, [open, q, hits.length]);

@@ -233,8 +233,8 @@ function RouteView({ route, onNav, onSearch }: { route: string; onNav: (p: strin
     case "categories": return <AllCategories onNav={onNav} />;
     case "category": return <CategoryPage slug={c.slug} onNav={onNav} />;
     case "about": return <About />;
-    case "not-found": return <NotFound onSearch={onSearch} />;
-    default: return <NotFound onSearch={onSearch} />;
+    case "not-found": return <NotFound onSearch={onSearch} onNav={onNav} />;
+    default: return <NotFound onSearch={onSearch} onNav={onNav} />;
   }
 }
 
@@ -638,7 +638,7 @@ function About() {
   );
 }
 
-function NotFound({ onSearch }: { onSearch: () => void }) {
+function NotFound({ onSearch, onNav }: { onSearch: () => void; onNav: (p: string) => void }) {
   return (
     <div className="mx-auto flex w-full max-w-xl flex-col items-center px-4 pb-24 pt-20 text-center sm:px-6">
       <p className="font-mono text-6xl font-bold text-zinc-200 dark:text-zinc-800">404</p>
@@ -647,6 +647,10 @@ function NotFound({ onSearch }: { onSearch: () => void }) {
       <button type="button" onClick={onSearch} className="mt-5 inline-flex items-center gap-2 rounded-xl bg-zinc-900 px-5 py-2.5 text-sm font-semibold text-white dark:bg-emerald-600">
         <Search size={15} /> Search DevUtils
       </button>
+      <p className="mt-6 text-[12px] font-bold uppercase tracking-wide text-zinc-400">Browse categories</p>
+      <div className="mt-2 flex flex-wrap justify-center gap-1.5">
+        {CATEGORIES.slice(0, 3).map((c) => <Chip key={c.id} label={c.name} onClick={() => onNav(`/categories/${c.slug}`)} />)}
+      </div>
     </div>
   );
 }
