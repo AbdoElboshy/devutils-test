@@ -1,0 +1,36 @@
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
+import { viteSingleFile } from "vite-plugin-singlefile";
+
+/**
+ * DevUtils production build.
+ *
+ * - `viteSingleFile` inlines the JS+CSS into dist/index.html, which matches the
+ *   committed production bundle and lets server/index.mjs inject the CSP nonce
+ *   and runtime config by rewriting the single <script type="module" crossorigin>
+ *   tag it expects.
+ * - `build.target: "es2022"` and default `assetsInlineLimit: 100000000` (set by
+ *   the singlefile plugin) keep everything inline.
+ */
+export default defineConfig({
+  plugins: [react(), tailwindcss(), viteSingleFile()],
+  build: {
+    target: "es2022",
+  },
+  server: {
+    // The dev server only serves the SPA; the gateway runs separately on its
+    // own port. Proxy same-origin API calls to the Node gateway so /api/*
+    // works in `npm run dev` without CORS changes.
+    proxy: {
+      "/api": {
+        target: process.env.DEVUTILS_GATEWAY_URL ?? "http://127.0.0.1:3000",
+        changeOrigin: true,
+      },
+      "/runtime-config.js": {
+        target: process.env.DEVUTILS_GATEWAY_URL ?? "http://127.0.0.1:3000",
+        changeOrigin: true,
+      },
+    },
+  },
+});
