@@ -1,0 +1,16 @@
+Files added or modified by this patch:
+AI_CONTEXT.md
+CHANGELOG.md
+PATCHING_AND_DEPLOYMENT.md
+PROJECT_STATUS.md
+UPDATE_MANIFEST.md
+package.json
+scripts/test-favorites.ts
+scripts/test-server.mjs
+server/index.mjs
+server/lib.mjs
+src/pages/account.tsx
+src/pages/admin.tsx
+src/platform/adaptive-repositories.ts
+src/platform/http-repositories.ts
+supabase/migrations/202610200001_audit_admin_actions.sql
