@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://devutils.app/sitemap.xml

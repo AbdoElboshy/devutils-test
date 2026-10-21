@@ -1,0 +1,630 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Activity, AlertTriangle, ArrowDownUp, Check, Download, Gauge, Layers, Lock,
+  Pencil, RefreshCw, Search, ShieldCheck, SlidersHorizontal, Trash2, Upload, X,
+} from "lucide-react";
+import { useAuth } from "../platform/auth-context";
+import {
+  exportRegistry, fetchAdminAnalytics, fetchAdminAudit, fetchAdminHealth, fetchAdminMe,
+  fetchAdminRegistry, importRegistry, reorderTools, resetToolOverride, saveCategoryOverride,
+  saveToolOverride, type AdminAnalytics, type AdminHealth, type AdminRegistry, type AuditEntry,
+  type CategoryOverlay, type ToolOverlay,
+} from "../platform/admin-api";
+import { applyRegistryOverlays, loadRegistryOverlays } from "../lib/registry";
+import { downloadFile } from "../lib/engine";
+import { Btn, ErrorCallout, Field, Panel, Select, Stat, TextInput, inputCls } from "../components/ui";
+import { AccountUnavailable } from "./auth";
+import { cn } from "../utils/cn";
+
+type Section = "overview" | "tools" | "categories" | "analytics" | "audit" | "health";
+
+const SECTIONS: { id: Section; label: string; icon: typeof Gauge; hint: string }[] = [
+  { id: "overview", label: "Overview", icon: Gauge, hint: "Live counts and configuration state" },
+  { id: "tools", label: "Tools", icon: Layers, hint: "Metadata, ordering, visibility" },
+  { id: "categories", label: "Categories", icon: SlidersHorizontal, hint: "Grouping and display order" },
+  { id: "analytics", label: "Analytics", icon: Activity, hint: "Real usage, no fabricated numbers" },
+  { id: "audit", label: "Audit log", icon: ShieldCheck, hint: "Administrative and account events" },
+  { id: "health", label: "Health", icon: AlertTriangle, hint: "Dependency and migration checks" },
+];
+
+export function AdminPage({ section, onNav }: { section: Section; onNav: (route: string) => void }) {
+  const auth = useAuth();
+  const [role, setRole] = useState<"unknown" | "admin" | "denied">("unknown");
+  const [registry, setRegistry] = useState<AdminRegistry | null>(null);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  const load = useCallback(async () => {
+    setError("");
+    try {
+      await fetchAdminMe();
+      setRole("admin");
+      setRegistry(await fetchAdminRegistry());
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "Admin access failed.";
+      setRole(/administrator|Authentication required|session/i.test(message) ? "denied" : "denied");
+      setError(message);
+    }
+  }, []);
+
+  useEffect(() => { if (auth.user) void load(); else if (!auth.loading) setRole("denied"); }, [auth.user, auth.loading, load]);
+
+  const refresh = async (message: string) => {
+    setRegistry(await fetchAdminRegistry());
+    await loadRegistryOverlays();
+    setNotice(message);
+    window.setTimeout(() => setNotice(""), 4000);
+  };
+
+  if (!auth.enabled) return <AccountUnavailable onNav={onNav} />;
+  if (auth.loading || role === "unknown") return <Centered>Verifying administrator access…</Centered>;
+  if (!auth.user) return <Centered action={<Btn variant="primary" onClick={() => onNav("/login")}>Sign in</Btn>}>Administrator access requires an authenticated session.</Centered>;
+  if (role === "denied") {
+    return (
+      <Centered action={<Btn onClick={() => onNav("/account")}>Back to account</Btn>}>
+        <span className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-red-50 text-red-600 dark:bg-red-950/40"><Lock size={20} /></span>
+        <strong className="block text-base">Administrator access required</strong>
+        <span className="mt-1 block max-w-md text-[13px] leading-relaxed">
+          Authorization is enforced by the gateway against the <code className="font-mono">admin_users</code> table. Signed-in users cannot promote themselves by editing a request, URL, or local storage.
+          {error && <> <span className="text-zinc-400">({error})</span></>}
+        </span>
+      </Centered>
+    );
+  }
+
+  return (
+    <div className="mx-auto w-full max-w-7xl px-4 pb-20 pt-7 sm:px-6">
+      <header className="flex flex-wrap items-end justify-between gap-3 border-b border-zinc-200 pb-4 dark:border-zinc-800">
+        <div>
+          <p className="font-mono text-[11px] font-bold uppercase tracking-[0.18em] text-emerald-600 dark:text-emerald-400">Administration</p>
+          <h1 className="mt-1 text-[26px] font-extrabold tracking-tight">{SECTIONS.find((s) => s.id === section)?.label ?? "Admin"}</h1>
+          <p className="mt-0.5 text-[13px] text-zinc-500">{SECTIONS.find((s) => s.id === section)?.hint}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {notice && <span role="status" className="flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[11.5px] font-semibold text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"><Check size={12} /> {notice}</span>}
+          <Btn onClick={() => { void load(); }}><RefreshCw size={14} /> Reload</Btn>
+        </div>
+      </header>
+
+      {error && <div className="mt-4"><ErrorCallout title="Admin request failed" message={error} hint="Server-side authorization and validation are authoritative; retry after correcting the input." /></div>}
+
+      <div className="mt-5 grid gap-5 lg:grid-cols-[196px_1fr]">
+        <nav aria-label="Admin sections" className="flex gap-1 overflow-x-auto pb-1 lg:block lg:space-y-1">
+          {SECTIONS.map((item) => (
+            <button key={item.id} type="button" onClick={() => onNav(item.id === "overview" ? "/admin" : `/admin/${item.id}`)} aria-current={section === item.id ? "page" : undefined}
+              className={cn("flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-[13px] font-medium transition lg:w-full",
+                section === item.id ? "bg-zinc-900 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-900" : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900")}>
+              <item.icon size={14} />{item.label}
+            </button>
+          ))}
+        </nav>
+
+        <div className="min-w-0">
+          {!registry ? <Panel className="p-8 text-center text-sm text-zinc-500">Loading registry…</Panel>
+            : section === "overview" ? <Overview registry={registry} onNav={onNav} />
+              : section === "tools" ? <ToolsManager registry={registry} onSaved={refresh} onError={setError} />
+                : section === "categories" ? <CategoryManager registry={registry} onSaved={refresh} onError={setError} />
+                  : section === "analytics" ? <Analytics />
+                    : section === "audit" ? <AuditLog />
+                      : <Health />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Centered({ children, action }: { children: React.ReactNode; action?: React.ReactNode }) {
+  return (
+    <div className="mx-auto flex w-full max-w-lg flex-col items-center px-4 py-24 text-center">
+      <p className="text-[14px] leading-relaxed text-zinc-500">{children}</p>
+      {action && <div className="mt-4">{action}</div>}
+    </div>
+  );
+}
+
+/* ------------------------------ Overview ------------------------------ */
+
+function Overview({ registry, onNav }: { registry: AdminRegistry; onNav: (route: string) => void }) {
+  const published = registry.tools.filter((t) => t.visibility === "published").length;
+  const draft = registry.tools.filter((t) => t.visibility === "draft").length;
+  const archived = registry.tools.filter((t) => t.visibility === "archived").length;
+  const overridden = registry.tools.filter((t) => t.updatedAt).length;
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat label="Registered tools" value={String(registry.tools.length)} />
+        <Stat label="Published" value={String(published)} />
+        <Stat label="Draft / archived" value={`${draft} / ${archived}`} />
+        <Stat label="Categories" value={String(registry.categories.length)} />
+      </div>
+      <Panel className="p-4">
+        <h2 className="text-[14px] font-extrabold">Configuration state</h2>
+        <dl className="mt-2 divide-y divide-zinc-100 text-[13px] dark:divide-zinc-800">
+          {[
+            ["Source of truth", "src/lib/registry.ts → registry.generated.json"],
+            ["Administrator overlays", overridden ? `${overridden} tool(s) customized` : "none — running base catalogue"],
+            ["Implementation ids", `${registry.baseToolIds.length} (not editable; new tools require code)`],
+            ["Visibility options", registry.visibilityOptions.join(", ")],
+          ].map(([k, v]) => (
+            <div key={k} className="flex flex-wrap items-baseline justify-between gap-2 py-2">
+              <dt className="text-zinc-500">{k}</dt><dd className="font-mono text-[12px] text-zinc-800 dark:text-zinc-200">{v}</dd>
+            </div>
+          ))}
+        </dl>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Btn onClick={() => onNav("/admin/tools")}><Pencil size={14} /> Manage tools</Btn>
+          <Btn onClick={() => onNav("/admin/analytics")}><Activity size={14} /> View analytics</Btn>
+          <Btn onClick={() => onNav("/admin/health")}><AlertTriangle size={14} /> Check health</Btn>
+        </div>
+      </Panel>
+      <p className="text-[12px] leading-relaxed text-zinc-500">
+        Every figure on this page is read from the live registry and database. No sample or projected values are rendered.
+      </p>
+    </div>
+  );
+}
+
+/* ------------------------------ Tools ------------------------------ */
+
+type SortKey = "order" | "name" | "category" | "visibility";
+
+function ToolsManager({ registry, onSaved, onError }: { registry: AdminRegistry; onSaved: (message: string) => Promise<void>; onError: (message: string) => void }) {
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("all");
+  const [visibility, setVisibility] = useState("all");
+  const [sort, setSort] = useState<SortKey>("order");
+  const [editing, setEditing] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const rows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return registry.tools
+      .filter((tool) => (category === "all" || tool.category === category)
+        && (visibility === "all" || tool.visibility === visibility)
+        && (!q || `${tool.id} ${tool.name} ${tool.description} ${(tool.keywords ?? []).join(" ")}`.toLowerCase().includes(q)))
+      .sort((a, b) => sort === "name" ? a.name.localeCompare(b.name)
+        : sort === "category" ? a.category.localeCompare(b.category) || a.name.localeCompare(b.name)
+          : sort === "visibility" ? a.visibility.localeCompare(b.visibility)
+            : (a.order ?? 0) - (b.order ?? 0));
+  }, [registry.tools, query, category, visibility, sort]);
+
+  const move = async (index: number, direction: -1 | 1) => {
+    const target = index + direction;
+    if (target < 0 || target >= rows.length) return;
+    const next = [...rows];
+    [next[index], next[target]] = [next[target], next[index]];
+    setBusy(true);
+    try { await reorderTools(next.map((tool) => ({ id: tool.id }))); await onSaved("Order updated"); }
+    catch (cause) { onError(cause instanceof Error ? cause.message : "Reorder failed."); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="space-y-3">
+      <Panel className="p-3">
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="min-w-[200px] flex-1">
+            <span className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-zinc-500">Search</span>
+            <span className="relative block">
+              <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="id, name, description, keyword…" aria-label="Search tools"
+                className={cn(inputCls, "pl-9 font-mono text-[13px]")} />
+            </span>
+          </label>
+          <Field label="Category" className="w-40"><Select value={category} onChange={(e) => setCategory(e.target.value)}><option value="all">All</option>{registry.categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></Field>
+          <Field label="Visibility" className="w-36"><Select value={visibility} onChange={(e) => setVisibility(e.target.value)}><option value="all">All</option>{registry.visibilityOptions.map((v) => <option key={v} value={v}>{v}</option>)}</Select></Field>
+          <Field label="Sort" className="w-36"><Select value={sort} onChange={(e) => setSort(e.target.value as SortKey)}><option value="order">Display order</option><option value="name">Name</option><option value="category">Category</option><option value="visibility">Visibility</option></Select></Field>
+        </div>
+        <p className="mt-2 text-[12px] text-zinc-500" role="status">{rows.length} of {registry.tools.length} tools</p>
+      </Panel>
+
+      <Panel className="overflow-hidden">
+        <div className="max-h-[62vh] overflow-auto">
+          <table className="w-full min-w-[720px] border-collapse text-left text-[13px]">
+            <thead className="sticky top-0 z-10 bg-zinc-50 text-[11px] uppercase tracking-wide text-zinc-500 dark:bg-zinc-900">
+              <tr>
+                <th scope="col" className="px-3 py-2 font-bold">Tool</th>
+                <th scope="col" className="px-3 py-2 font-bold">Category</th>
+                <th scope="col" className="px-3 py-2 font-bold">Visibility</th>
+                <th scope="col" className="px-3 py-2 font-bold">Order</th>
+                <th scope="col" className="px-3 py-2 text-right font-bold">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((tool, index) => (
+                <tr key={tool.id} className="border-t border-zinc-100 align-top transition hover:bg-zinc-50/70 dark:border-zinc-800/70 dark:hover:bg-zinc-900/50">
+                  <td className="px-3 py-2.5">
+                    <p className="font-semibold">{tool.name}</p>
+                    <p className="font-mono text-[11px] text-zinc-400">{tool.id} · {tool.route}</p>
+                    <p className="mt-0.5 line-clamp-2 max-w-md text-[12px] text-zinc-500">{tool.description}</p>
+                    {tool.updatedAt && <p className="mt-1 text-[11px] text-emerald-600 dark:text-emerald-400">customized {new Date(tool.updatedAt).toLocaleDateString()}</p>}
+                  </td>
+                  <td className="px-3 py-2.5 text-[12px] text-zinc-600 dark:text-zinc-400">{tool.category}</td>
+                  <td className="px-3 py-2.5"><VisibilityPill value={tool.visibility} featured={tool.featured} /></td>
+                  <td className="px-3 py-2.5">
+                    <div className="flex items-center gap-1">
+                      <button type="button" onClick={() => { void move(index, -1); }} disabled={busy || index === 0} aria-label={`Move ${tool.name} up`}
+                        className="rounded-md border border-zinc-200 p-1 text-zinc-500 transition hover:border-emerald-500 hover:text-emerald-600 disabled:opacity-30 dark:border-zinc-700"><ArrowDownUp size={12} className="-scale-y-100" /></button>
+                      <button type="button" onClick={() => { void move(index, 1); }} disabled={busy || index === rows.length - 1} aria-label={`Move ${tool.name} down`}
+                        className="rounded-md border border-zinc-200 p-1 text-zinc-500 transition hover:border-emerald-500 hover:text-emerald-600 disabled:opacity-30 dark:border-zinc-700"><ArrowDownUp size={12} /></button>
+                      <span className="ml-1 font-mono text-[11px] text-zinc-400">{tool.order ?? index}</span>
+                    </div>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <div className="flex justify-end gap-1">
+                      <Btn variant="ghost" className="px-2 py-1" onClick={() => setEditing(editing === tool.id ? null : tool.id)}><Pencil size={13} /> {editing === tool.id ? "Close" : "Edit"}</Btn>
+                      {tool.updatedAt && <Btn variant="ghost" className="px-2 py-1" onClick={() => { setBusy(true); void resetToolOverride(tool.id).then(() => onSaved("Reset to defaults")).catch((c: unknown) => onError(c instanceof Error ? c.message : "Reset failed.")).finally(() => setBusy(false)); }}><Trash2 size={13} /> Reset</Btn>}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {!rows.length && <tr><td colSpan={5} className="px-3 py-10 text-center text-[13px] text-zinc-500">No tools match these filters.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+
+      {editing && <ToolEditor tool={registry.tools.find((t) => t.id === editing)!} categories={registry.categories} onClose={() => setEditing(null)} onSaved={onSaved} onError={onError} />}
+      <ImportExport onError={onError} onSaved={onSaved} />
+    </div>
+  );
+}
+
+function VisibilityPill({ value, featured }: { value: string; featured?: boolean }) {
+  const tone = value === "published" ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+    : value === "draft" ? "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
+      : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400";
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1">
+      <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold capitalize", tone)}>{value}</span>
+      {featured && <span className="rounded-full bg-zinc-900 px-2 py-0.5 text-[10px] font-bold uppercase text-lime-300 dark:bg-zinc-100 dark:text-zinc-900">featured</span>}
+    </span>
+  );
+}
+
+function ToolEditor({ tool, categories, onClose, onSaved, onError }: {
+  tool: AdminRegistry["tools"][number]; categories: AdminRegistry["categories"];
+  onClose: () => void; onSaved: (message: string) => Promise<void>; onError: (message: string) => void;
+}) {
+  const [form, setForm] = useState<ToolOverlay>({
+    id: tool.id, name: tool.name, slug: tool.slug, description: tool.description,
+    longDescription: tool.longDescription, category: tool.category, keywords: tool.keywords,
+    aliases: tool.aliases, related: tool.related, tags: tool.tags ?? [],
+    featured: Boolean(tool.featured), visibility: (tool.visibility as ToolOverlay["visibility"]) ?? "published", order: tool.order ?? 0,
+  });
+  const [errors, setErrors] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const set = <K extends keyof ToolOverlay>(key: K, value: ToolOverlay[K]) => setForm((f) => ({ ...f, [key]: value }));
+  const list = (value: string[]) => value.join(", ");
+  const unlist = (value: string) => value.split(",").map((v) => v.trim()).filter(Boolean);
+
+  const save = async () => {
+    setBusy(true); setErrors([]);
+    try { await saveToolOverride(tool.id, form); await onSaved(`Saved ${tool.name}`); onClose(); }
+    catch (cause) {
+      const message = cause instanceof Error ? cause.message : "Save failed.";
+      const parsed = /errors/.test(message) ? message : null;
+      setErrors(parsed ? [parsed] : [message]);
+      onError(message);
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <Panel className="p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-[15px] font-extrabold">Edit {tool.name}</h2>
+          <p className="mt-0.5 font-mono text-[11.5px] text-zinc-400">{tool.id} — implementation id is fixed; metadata is editable</p>
+        </div>
+        <button type="button" onClick={onClose} aria-label="Close editor" className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800"><X size={16} /></button>
+      </div>
+
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        <Field label="Display name"><TextInput value={form.name ?? ""} onChange={(e) => set("name", e.target.value)} maxLength={80} /></Field>
+        <Field label="Slug" hint="Changes the public URL. Existing links to the old route stop resolving."><TextInput value={form.slug ?? ""} onChange={(e) => set("slug", e.target.value)} className="font-mono" maxLength={80} /></Field>
+        <Field label="Category"><Select value={form.category ?? ""} onChange={(e) => set("category", e.target.value)}>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Visibility"><Select value={form.visibility ?? "published"} onChange={(e) => set("visibility", e.target.value as ToolOverlay["visibility"])}><option value="published">published</option><option value="draft">draft</option><option value="archived">archived</option></Select></Field>
+          <Field label="Display order"><TextInput type="number" min={0} max={9999} value={String(form.order ?? 0)} onChange={(e) => set("order", Number(e.target.value))} className="font-mono" /></Field>
+        </div>
+        <Field label="Short description" className="md:col-span-2"><textarea value={form.description ?? ""} onChange={(e) => set("description", e.target.value)} rows={2} maxLength={240} className={cn(inputCls, "text-[13px]")} /></Field>
+        <Field label="Long description" className="md:col-span-2"><textarea value={form.longDescription ?? ""} onChange={(e) => set("longDescription", e.target.value)} rows={3} maxLength={1200} className={cn(inputCls, "text-[13px]")} /></Field>
+        <Field label="Keywords (comma separated)"><TextInput value={list(form.keywords ?? [])} onChange={(e) => set("keywords", unlist(e.target.value))} className="font-mono text-[12px]" /></Field>
+        <Field label="Aliases (comma separated)"><TextInput value={list(form.aliases ?? [])} onChange={(e) => set("aliases", unlist(e.target.value))} className="font-mono text-[12px]" /></Field>
+        <Field label="Tags (comma separated)"><TextInput value={list(form.tags ?? [])} onChange={(e) => set("tags", unlist(e.target.value))} className="font-mono text-[12px]" /></Field>
+        <Field label="Related tool ids (comma separated)"><TextInput value={list(form.related ?? [])} onChange={(e) => set("related", unlist(e.target.value))} className="font-mono text-[12px]" /></Field>
+        <label className="flex items-center gap-2 text-[13px] md:col-span-2">
+          <input type="checkbox" checked={Boolean(form.featured)} onChange={(e) => set("featured", e.target.checked)} className="h-4 w-4 accent-emerald-600" />
+          Featured on the homepage
+        </label>
+      </div>
+
+      {errors.length > 0 && (
+        <div className="mt-3" role="alert">
+          <ErrorCallout title="Validation failed" message={errors.join(" · ")} hint="Nothing was written. Correct the fields and save again." />
+        </div>
+      )}
+      <p className="mt-3 rounded-lg bg-zinc-100 p-2.5 text-[11.5px] leading-relaxed text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
+        Only metadata is editable here. Tool behaviour lives in code, so an administrator cannot inject executable JavaScript, SQL, or shell commands through configuration.
+      </p>
+      <div className="mt-3 flex gap-2">
+        <Btn variant="primary" onClick={() => { void save(); }} disabled={busy}>{busy ? "Saving…" : "Save changes"}</Btn>
+        <Btn onClick={onClose} disabled={busy}>Cancel</Btn>
+      </div>
+    </Panel>
+  );
+}
+
+function ImportExport({ onSaved, onError }: { onSaved: (message: string) => Promise<void>; onError: (message: string) => void }) {
+  const [raw, setRaw] = useState("");
+  const [result, setResult] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  const doExport = async () => {
+    setBusy(true);
+    try {
+      const data = await exportRegistry();
+      downloadFile("devutils-registry-overrides.json", JSON.stringify(data, null, 2), "application/json");
+      setResult([`Exported ${data.tools.length} tool override(s) and ${data.categories.length} category override(s).`]);
+    } catch (cause) { onError(cause instanceof Error ? cause.message : "Export failed."); }
+    finally { setBusy(false); }
+  };
+
+  const doImport = async (dryRun: boolean) => {
+    setBusy(true); setResult([]);
+    try {
+      const payload = JSON.parse(raw) as unknown;
+      const response = await importRegistry(payload, dryRun);
+      if ("errors" in response) { setResult(response.errors); onError("Import validation failed."); }
+      else {
+        setResult([dryRun ? `Dry run passed — ${response.wouldWrite} entries would be written.` : `Imported ${response.written} entries.`]);
+        if (!dryRun) await onSaved("Registry imported");
+      }
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "Import failed.";
+      setResult([message]); onError(message);
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <Panel className="p-4">
+      <h2 className="text-[14px] font-extrabold">Export / import configuration</h2>
+      <p className="mt-1 text-[12.5px] text-zinc-500">Move validated overrides between environments. Imports are validated before anything is written, and a dry run writes nothing.</p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Btn onClick={() => { void doExport(); }} disabled={busy}><Download size={14} /> Export JSON</Btn>
+      </div>
+      <Field label="Import payload" className="mt-3">
+        <textarea value={raw} onChange={(e) => setRaw(e.target.value)} rows={6} spellCheck={false}
+          placeholder='{"tools":[{"id":"json","featured":true,"order":0}]}' className={cn(inputCls, "font-mono text-[12px]")} />
+      </Field>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Btn onClick={() => { void doImport(true); }} disabled={busy || !raw.trim()}><Upload size={14} /> Validate (dry run)</Btn>
+        <Btn variant="primary" onClick={() => { void doImport(false); }} disabled={busy || !raw.trim()}>{busy ? "Working…" : "Import"}</Btn>
+      </div>
+      {result.length > 0 && (
+        <ul className="mt-3 space-y-1 rounded-lg bg-zinc-100 p-3 font-mono text-[11.5px] dark:bg-zinc-900" role="status">
+          {result.map((line, i) => <li key={i} className="text-zinc-700 dark:text-zinc-300">{line}</li>)}
+        </ul>
+      )}
+    </Panel>
+  );
+}
+
+/* ------------------------------ Categories ------------------------------ */
+
+function CategoryManager({ registry, onSaved, onError }: { registry: AdminRegistry; onSaved: (message: string) => Promise<void>; onError: (message: string) => void }) {
+  const [editing, setEditing] = useState<string | null>(null);
+  const counts = useMemo(() => {
+    const map = new Map<string, number>();
+    registry.tools.forEach((tool) => map.set(tool.category, (map.get(tool.category) ?? 0) + 1));
+    return map;
+  }, [registry.tools]);
+
+  return (
+    <div className="space-y-3">
+      <Panel className="overflow-hidden">
+        <table className="w-full min-w-[560px] border-collapse text-left text-[13px]">
+          <thead className="bg-zinc-50 text-[11px] uppercase tracking-wide text-zinc-500 dark:bg-zinc-900">
+            <tr><th scope="col" className="px-3 py-2 font-bold">Category</th><th scope="col" className="px-3 py-2 font-bold">Slug</th><th scope="col" className="px-3 py-2 font-bold">Tools</th><th scope="col" className="px-3 py-2 font-bold">Order</th><th scope="col" className="px-3 py-2 text-right font-bold">Actions</th></tr>
+          </thead>
+          <tbody>
+            {registry.categories.map((category) => (
+              <tr key={category.id} className="border-t border-zinc-100 dark:border-zinc-800/70">
+                <td className="px-3 py-2.5">
+                  <p className="font-semibold">{category.name}{category.enabled === false && <span className="ml-2 rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-bold uppercase text-zinc-500 dark:bg-zinc-800">disabled</span>}</p>
+                  <p className="line-clamp-1 max-w-md text-[12px] text-zinc-500">{category.description}</p>
+                </td>
+                <td className="px-3 py-2.5 font-mono text-[11.5px] text-zinc-400">{category.slug}</td>
+                <td className="px-3 py-2.5 font-mono text-[12px]">{counts.get(category.id) ?? 0}</td>
+                <td className="px-3 py-2.5 font-mono text-[12px] text-zinc-400">{category.order}</td>
+                <td className="px-3 py-2.5 text-right"><Btn variant="ghost" className="px-2 py-1" onClick={() => setEditing(editing === category.id ? null : category.id)}><Pencil size={13} /> {editing === category.id ? "Close" : "Edit"}</Btn></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Panel>
+      {editing && (
+        <CategoryEditor
+          category={registry.categories.find((c) => c.id === editing)!}
+          toolCount={counts.get(editing) ?? 0}
+          onClose={() => setEditing(null)} onSaved={onSaved} onError={onError}
+        />
+      )}
+      <p className="text-[12px] leading-relaxed text-zinc-500">
+        Categories cannot be deleted while tools are assigned to them. Disable a category to hide it from navigation, or reassign its tools first — historical favorites and recent-tool references keep working either way.
+      </p>
+    </div>
+  );
+}
+
+function CategoryEditor({ category, toolCount, onClose, onSaved, onError }: {
+  category: AdminRegistry["categories"][number]; toolCount: number;
+  onClose: () => void; onSaved: (message: string) => Promise<void>; onError: (message: string) => void;
+}) {
+  const [form, setForm] = useState<CategoryOverlay>({ id: category.id, name: category.name, slug: category.slug, description: category.description, tagline: category.tagline, order: category.order ?? 0, enabled: category.enabled !== false });
+  const [busy, setBusy] = useState(false);
+  const [errors, setErrors] = useState<string[]>([]);
+  const save = async () => {
+    setBusy(true); setErrors([]);
+    try { await saveCategoryOverride(category.id, form); await onSaved(`Saved ${form.name}`); onClose(); }
+    catch (cause) { const message = cause instanceof Error ? cause.message : "Save failed."; setErrors([message]); onError(message); }
+    finally { setBusy(false); }
+  };
+  return (
+    <Panel className="p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div><h2 className="text-[15px] font-extrabold">Edit {category.name}</h2><p className="mt-0.5 font-mono text-[11.5px] text-zinc-400">{category.id} · {toolCount} tool(s) assigned</p></div>
+        <button type="button" onClick={onClose} aria-label="Close editor" className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X size={16} /></button>
+      </div>
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        <Field label="Name"><TextInput value={form.name ?? ""} onChange={(e) => setForm({ ...form, name: e.target.value })} maxLength={60} /></Field>
+        <Field label="Slug" hint="Changing this changes /categories/<slug>."><TextInput value={form.slug ?? ""} onChange={(e) => setForm({ ...form, slug: e.target.value })} className="font-mono" maxLength={60} /></Field>
+        <Field label="Tagline" className="md:col-span-2"><TextInput value={form.tagline ?? ""} onChange={(e) => setForm({ ...form, tagline: e.target.value })} maxLength={160} /></Field>
+        <Field label="Description" className="md:col-span-2"><textarea value={form.description ?? ""} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={2} maxLength={400} className={cn(inputCls, "text-[13px]")} /></Field>
+        <Field label="Display order"><TextInput type="number" min={0} max={999} value={String(form.order ?? 0)} onChange={(e) => setForm({ ...form, order: Number(e.target.value) })} className="font-mono" /></Field>
+        <label className="flex items-center gap-2 pb-2 text-[13px]"><input type="checkbox" checked={form.enabled !== false} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} className="h-4 w-4 accent-emerald-600" /> Visible in navigation</label>
+      </div>
+      {errors.length > 0 && <div className="mt-3"><ErrorCallout title="Validation failed" message={errors.join(" · ")} /></div>}
+      <div className="mt-3 flex gap-2"><Btn variant="primary" onClick={() => { void save(); }} disabled={busy}>{busy ? "Saving…" : "Save category"}</Btn><Btn onClick={onClose} disabled={busy}>Cancel</Btn></div>
+    </Panel>
+  );
+}
+
+/* ------------------------------ Analytics ------------------------------ */
+
+function Analytics() {
+  const [days, setDays] = useState(30);
+  const [data, setData] = useState<AdminAnalytics | null>(null);
+  const [error, setError] = useState("");
+  const load = useCallback(async () => {
+    setError("");
+    try { setData(await fetchAdminAnalytics(days)); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Analytics unavailable."); }
+  }, [days]);
+  useEffect(() => { void load(); }, [load]);
+  const max = data?.topTools[0]?.count ?? 0;
+
+  return (
+    <div className="space-y-4">
+      <Panel className="flex flex-wrap items-end gap-3 p-3">
+        <Field label="Window"><Select value={String(days)} onChange={(e) => setDays(Number(e.target.value))} className="w-32"><option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option></Select></Field>
+        <Btn onClick={() => { void load(); }}><RefreshCw size={14} /> Refresh</Btn>
+        {data && <p className="pb-2 font-mono text-[11px] text-zinc-400">collected {new Date(data.collectedAt).toLocaleString()}</p>}
+      </Panel>
+      {error && <ErrorCallout title="Analytics unavailable" message={error} hint="The dashboard never renders fabricated numbers when a query fails." />}
+      {data && (
+        <>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Stat label="Registered users" value={String(data.registeredUsers)} />
+            <Stat label={`New in ${data.windowDays}d`} value={String(data.newUsersInWindow)} />
+            <Stat label="Workflow runs" value={String(data.workflowRuns)} />
+            <Stat label="Auth failures" value={String(data.authFailures)} />
+          </div>
+          {!data.available.anonymousEvents && (
+            <div className="flex gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-[12.5px] text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+              <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+              <span>Anonymous product analytics are not being collected. Visitors must opt in via Settings → Privacy, so per-tool counters below reflect account usage only. This is an honest gap, not a zero.</span>
+            </div>
+          )}
+          <Panel className="p-4">
+            <h2 className="text-[14px] font-extrabold">Tool usage</h2>
+            {data.topTools.length ? (
+              <ul className="mt-3 space-y-2">
+                {data.topTools.map((tool) => (
+                  <li key={tool.toolId}>
+                    <div className="flex items-baseline justify-between gap-2 text-[12.5px]">
+                      <span className="font-medium">{tool.name}</span><span className="font-mono text-zinc-500">{tool.count}</span>
+                    </div>
+                    <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+                      <div className="h-full rounded-full bg-emerald-500 transition-all duration-500" style={{ width: `${max ? (tool.count / max) * 100 : 0}%` }} />
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : <p className="mt-2 text-[13px] text-zinc-500">No tool usage recorded in this window.</p>}
+          </Panel>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Panel className="p-4">
+              <h2 className="text-[14px] font-extrabold">Least used</h2>
+              {data.leastUsedTools.length ? <ul className="mt-2 space-y-1 text-[12.5px] text-zinc-600 dark:text-zinc-400">{data.leastUsedTools.map((t) => <li key={t.toolId} className="flex justify-between gap-2"><span>{t.name}</span><span className="font-mono text-zinc-400">{t.count}</span></li>)}</ul> : <p className="mt-2 text-[13px] text-zinc-500">Every registered tool recorded usage.</p>}
+            </Panel>
+            <Panel className="p-4">
+              <h2 className="text-[14px] font-extrabold">Failures</h2>
+              <div className="mt-2 grid grid-cols-2 gap-2"><Stat label="Tool errors" value={String(data.toolFailures)} /><Stat label="Auth errors" value={String(data.authFailures)} /></div>
+              <p className="mt-2 text-[11.5px] leading-relaxed text-zinc-500">Event names and identifiers only — never tool input, tokens, or payloads.</p>
+            </Panel>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------ Audit ------------------------------ */
+
+function AuditLog() {
+  const [rows, setRows] = useState<AuditEntry[] | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => { fetchAdminAudit(80).then(setRows).catch((c: unknown) => setError(c instanceof Error ? c.message : "Audit unavailable.")); }, []);
+  return (
+    <Panel className="p-4">
+      <h2 className="text-[14px] font-extrabold">Audit log</h2>
+      <p className="mt-1 text-[12.5px] text-zinc-500">Administrative and account events. Passwords, tokens, API keys, and tool input are never recorded.</p>
+      {error && <div className="mt-3"><ErrorCallout title="Audit unavailable" message={error} /></div>}
+      {rows && (
+        <div className="mt-3 max-h-[60vh] overflow-auto rounded-xl border border-zinc-200 dark:border-zinc-800">
+          {rows.length ? rows.map((row) => (
+            <div key={row.id} className="flex flex-wrap items-baseline gap-2 border-b border-zinc-100 px-3 py-2 text-[12.5px] last:border-0 dark:border-zinc-800/70">
+              <code className="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[11px] font-bold dark:bg-zinc-800">{row.action}</code>
+              <span className="font-mono text-[11px] text-zinc-400">{row.user_id.slice(0, 8)}</span>
+              <span className="ml-auto font-mono text-[11px] text-zinc-400">{new Date(row.created_at).toLocaleString()}</span>
+              {Object.keys(row.metadata ?? {}).length > 0 && <span className="w-full font-mono text-[11px] text-zinc-500">{JSON.stringify(row.metadata)}</span>}
+            </div>
+          )) : <p className="p-6 text-center text-[13px] text-zinc-500">No audit events recorded yet.</p>}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+/* ------------------------------ Health ------------------------------ */
+
+function Health() {
+  const [data, setData] = useState<AdminHealth | null>(null);
+  const [error, setError] = useState("");
+  const load = useCallback(() => { fetchAdminHealth().then(setData).catch((c: unknown) => setError(c instanceof Error ? c.message : "Health check failed.")); }, []);
+  useEffect(load, [load]);
+  return (
+    <div className="space-y-3">
+      <Panel className="flex flex-wrap items-center gap-3 p-3">
+        <Btn onClick={load}><RefreshCw size={14} /> Re-run checks</Btn>
+        {data && <span className={cn("rounded-full px-2.5 py-1 text-[11.5px] font-bold uppercase", data.status === "ok" ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300" : "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300")}>{data.status}</span>}
+        {data?.migrationRequired && <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11.5px] font-bold text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">migration required</span>}
+      </Panel>
+      {error && <ErrorCallout title="Health check failed" message={error} />}
+      {data && (
+        <Panel className="overflow-hidden">
+          <table className="w-full border-collapse text-left text-[13px]">
+            <thead className="bg-zinc-50 text-[11px] uppercase tracking-wide text-zinc-500 dark:bg-zinc-900"><tr><th scope="col" className="px-3 py-2 font-bold">Table</th><th scope="col" className="px-3 py-2 font-bold">State</th><th scope="col" className="px-3 py-2 text-right font-bold">Rows</th></tr></thead>
+            <tbody>
+              {Object.entries(data.checks).map(([table, check]) => (
+                <tr key={table} className="border-t border-zinc-100 dark:border-zinc-800/70">
+                  <td className="px-3 py-2 font-mono text-[12px]">{table}</td>
+                  <td className="px-3 py-2">{check.ok ? <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-emerald-600"><Check size={13} /> reachable</span> : <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-red-600"><X size={13} /> unavailable</span>}</td>
+                  <td className="px-3 py-2 text-right font-mono text-[12px] text-zinc-500">{check.rows ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Panel>
+      )}
+      {data?.migrationRequired && (
+        <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[12.5px] leading-relaxed text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+          After backing up and checking migration history, apply <code className="font-mono">supabase/migrations/202610190002_tools_admin_analytics.sql</code> if its tables are missing, then verify/apply <code className="font-mono">supabase/migrations/202610200001_audit_admin_actions.sql</code> so administrative audit actions are allowed. Bootstrap an administrator with <code className="font-mono">select public.grant_admin('&lt;user-uuid&gt;')</code> only after confirming the user's UUID.
+        </p>
+      )}
+    </div>
+  );
+}
+
+export { applyRegistryOverlays };

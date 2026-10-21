@@ -1,0 +1,426 @@
+import { useCallback, useEffect, useRef, useState, type ReactNode, type DragEvent } from "react";
+import { Check as CheckIcon, Copy, Download, Trash2, ShieldCheck, Globe, AlertTriangle, ChevronRight, Upload, ArrowLeftRight, Star } from "lucide-react";
+import { copyText, downloadFile } from "../lib/engine";
+import { CATEGORIES, TOOL_MAP, type Tool } from "../lib/registry";
+import { track } from "../lib/analytics";
+import { platform } from "../platform";
+import { useAuth } from "../platform/auth-context";
+import { getPrivacyPreferences } from "../platform/privacy";
+import { cn } from "../utils/cn";
+
+/* ---------- hooks ---------- */
+
+export function usePreferenceStorage<T>(key: "du:theme", initial: T): [T, (v: T | ((p: T) => T)) => void] {
+  const [val, setVal] = useState<T>(() => {
+    try { const raw = localStorage.getItem(key); return raw !== null ? JSON.parse(raw) as T : initial; } catch { return initial; }
+  });
+  const set = useCallback((v: T | ((p: T) => T)) => {
+    setVal((prev) => {
+      const next = typeof v === "function" ? (v as (p: T) => T)(prev) : v;
+      try { localStorage.setItem(key, JSON.stringify(next)); } catch { /* noop */ }
+      return next;
+    });
+  }, [key]);
+  return [val, set];
+}
+
+export function useFavorites() {
+  const [favs, setFavs] = useState<string[]>([]);
+  useEffect(() => platform.favorites.subscribe((items) => {
+    setFavs(items.filter((item) => item.kind === "tool").map((item) => item.targetId));
+  }), []);
+  const toggle = useCallback((id: string) => { void platform.favorites.toggle("tool", id); }, []);
+  return { favs, toggle, has: (id: string) => favs.includes(id) };
+}
+
+export function useEntityFavorite(kind: "tool" | "toolkit" | "workflow" | "integration", targetId: string) {
+  const [active, setActive] = useState(false);
+  useEffect(() => platform.favorites.subscribe((items) => setActive(items.some((item) => item.kind === kind && item.targetId === targetId))), [kind, targetId]);
+  const toggle = useCallback(() => { void platform.favorites.toggle(kind, targetId); }, [kind, targetId]);
+  return { active, toggle };
+}
+
+export function useRecents() {
+  const [recents, setRecents] = useState<string[]>([]);
+  useEffect(() => platform.recentTools.subscribe((items) => setRecents(items.map((item) => item.toolId))), []);
+  const push = useCallback((id: string) => { void platform.recentTools.record(id); }, []);
+  return { recents, push };
+}
+
+export function useCopy(timeout = 1600): [boolean, (t: string) => void] {
+  const [ok, setOk] = useState(false);
+  const timer = useRef<number | null>(null);
+  const copy = useCallback((t: string) => {
+    if (!t) return;
+    copyText(t).then((done) => {
+      if (done) {
+        setOk(true);
+        if (timer.current) window.clearTimeout(timer.current);
+        timer.current = window.setTimeout(() => setOk(false), timeout);
+      }
+    });
+  }, [timeout]);
+  useEffect(() => () => { if (timer.current) window.clearTimeout(timer.current); }, []);
+  return [ok, copy];
+}
+
+/* ---------- primitives ---------- */
+
+export function Panel({ className, children }: { className?: string; children: ReactNode }) {
+  return (
+    <div className={cn("rounded-xl border border-zinc-200 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:border-zinc-800 dark:bg-zinc-950", className)}>
+      {children}
+    </div>
+  );
+}
+
+export function Field({ label, hint, children, className }: { label: string; hint?: string; children: ReactNode; className?: string }) {
+  return (
+    <label className={cn("block", className)}>
+      <span className="mb-1.5 block text-[12px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">{label}</span>
+      {children}
+      {hint && <span className="mt-1 block text-xs text-zinc-500 dark:text-zinc-500">{hint}</span>}
+    </label>
+  );
+}
+
+export const inputCls = "w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-emerald-600 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-emerald-500";
+export const monoInputCls = inputCls + " font-mono text-[13px] leading-relaxed";
+
+export function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
+  return <input {...props} className={cn(inputCls, props.className)} />;
+}
+export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
+  return <select {...props} className={cn(inputCls, "pr-8", props.className)} />;
+}
+export function NumInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
+  return <input type="number" {...props} className={cn(inputCls, "font-mono", props.className)} />;
+}
+export function Check({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label className="inline-flex cursor-pointer select-none items-center gap-2 rounded-lg border border-zinc-200 px-2.5 py-1.5 text-[13px] text-zinc-700 transition hover:border-zinc-300 dark:border-zinc-800 dark:text-zinc-300 dark:hover:border-zinc-700">
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="h-3.5 w-3.5 accent-emerald-600" />
+      {label}
+    </label>
+  );
+}
+export function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button type="button" role="switch" aria-checked={checked} onClick={() => onChange(!checked)}
+      className="inline-flex cursor-pointer items-center gap-2 text-[13px] text-zinc-600 dark:text-zinc-400">
+      <span className={cn("relative h-5 w-9 rounded-full transition", checked ? "bg-emerald-600" : "bg-zinc-300 dark:bg-zinc-700")}>
+        <span className={cn("absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all", checked ? "left-[18px]" : "left-0.5")} />
+      </span>
+      {label}
+    </button>
+  );
+}
+
+export function Btn({ children, onClick, variant = "secondary", className, title, disabled, type = "button" }: {
+  children: ReactNode; onClick?: () => void; variant?: "primary" | "secondary" | "ghost" | "danger"; className?: string; title?: string; disabled?: boolean; type?: "button" | "submit" | "reset";
+}) {
+  return (
+    <button type={type} title={title} disabled={disabled} onClick={onClick}
+      className={cn(
+        "inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-[13px] font-medium transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40",
+        variant === "primary" && "bg-zinc-900 text-white hover:bg-zinc-700 dark:bg-emerald-600 dark:text-white dark:hover:bg-emerald-500",
+        variant === "secondary" && "border border-zinc-300 bg-white text-zinc-800 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800",
+        variant === "ghost" && "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100",
+        variant === "danger" && "border border-red-200 text-red-600 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950",
+        className
+      )}>
+      {children}
+    </button>
+  );
+}
+
+export function CopyBtn({ text, label = "Copy" }: { text: string; label?: string }) {
+  const [ok, copy] = useCopy();
+  return (
+    <Btn onClick={() => copy(text)} disabled={!text} title="Copy output (Ctrl+Shift+C)">
+      {ok ? <CheckIcon size={15} className="text-emerald-500" /> : <Copy size={15} />}
+      {ok ? "Copied" : label}
+    </Btn>
+  );
+}
+export function DownloadBtn({ text, filename }: { text: string; filename: string }) {
+  return (
+    <Btn onClick={() => downloadFile(filename, text)} disabled={!text} title="Download result">
+      <Download size={15} /> Download
+    </Btn>
+  );
+}
+export function ClearBtn({ onClick }: { onClick: () => void }) {
+  return <Btn variant="ghost" onClick={onClick}><Trash2 size={15} /> Clear</Btn>;
+}
+export function SwapBtn({ onClick, title = "Swap input/output" }: { onClick: () => void; title?: string }) {
+  return <Btn variant="ghost" onClick={onClick} title={title} className="px-2"><ArrowLeftRight size={15} /></Btn>;
+}
+
+export function Tabs({ tabs, active, onChange, ariaLabel }: { tabs: { id: string; label: string; hint?: string }[]; active: string; onChange: (id: string) => void; ariaLabel?: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  return (
+    <div ref={ref} role="tablist" aria-label={ariaLabel ?? "Operations"}
+      className="flex flex-wrap gap-1 rounded-xl bg-zinc-100 p-1 dark:bg-zinc-900">
+      {tabs.map((t) => (
+        <button key={t.id} role="tab" aria-selected={active === t.id} title={t.hint}
+          onClick={() => onChange(t.id)}
+          onKeyDown={(e) => {
+            if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+            e.preventDefault();
+            const idx = tabs.findIndex((x) => x.id === active);
+            const next = (idx + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+            onChange(tabs[next].id);
+          }}
+          className={cn(
+            "rounded-lg px-3 py-1.5 text-[13px] font-medium transition",
+            active === t.id
+              ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-white"
+              : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+          )}>
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function CodeArea({ value, onChange, placeholder, label, rows = 12, accept, onFile, mono = true, error }: {
+  value: string; onChange: (v: string) => void; placeholder?: string; label: string; rows?: number;
+  accept?: string; onFile?: (text: string, name: string) => void; mono?: boolean; error?: string | null;
+}) {
+  const [drag, setDrag] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const drop = (e: DragEvent) => {
+    e.preventDefault(); setDrag(false);
+    const f = e.dataTransfer.files?.[0];
+    if (f && onFile) f.text().then((t) => onFile(t, f.name)).catch(() => { /* noop */ });
+    else if (f) f.text().then(onChange).catch(() => { /* noop */ });
+  };
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="text-[12px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">{label}</span>
+        <div className="flex items-center gap-1">
+          {onFile !== undefined && (
+            <>
+              <button type="button" onClick={() => fileRef.current?.click()} title="Upload file"
+                className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200">
+                <Upload size={14} />
+              </button>
+              <input ref={fileRef} type="file" accept={accept} className="hidden" onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) f.text().then((t) => (onFile ? onFile(t, f.name) : onChange(t))).catch(() => { /* noop */ });
+                e.target.value = "";
+              }} />
+            </>
+          )}
+          {value && <span className="font-mono text-[11px] text-zinc-400">{value.length.toLocaleString()} chars</span>}
+        </div>
+      </div>
+      <div onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={drop}
+        className={cn("relative overflow-hidden rounded-xl border transition",
+          drag ? "border-emerald-500 ring-2 ring-emerald-500/20" : error ? "border-red-400 dark:border-red-800" : "border-zinc-300 dark:border-zinc-700")}>
+        <textarea value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} rows={rows} spellCheck={false}
+          aria-label={label}
+          className={cn("editor block w-full resize-y bg-white px-3.5 py-3 text-zinc-900 outline-none dark:bg-zinc-900 dark:text-zinc-100", !mono && "font-sans")} />
+        {!value && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-2 text-center text-[11px] text-zinc-400">
+            Paste, drop a file, or start typing
+          </div>
+        )}
+      </div>
+      {error && <p role="alert" className="mt-2 text-[13px] text-red-600 dark:text-red-400">{error}</p>}
+    </div>
+  );
+}
+
+export function OutputBox({ value, label = "Output", placeholder = "Result appears here", filename = "devutils-output.txt", rows = 12 }: {
+  value: string; label?: string; placeholder?: string; filename?: string; rows?: number;
+}) {
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="text-[12px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">{label}</span>
+        {value && <span className="font-mono text-[11px] text-zinc-400">{value.length.toLocaleString()} chars</span>}
+      </div>
+      <div className="overflow-hidden rounded-xl border border-zinc-300 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900/60">
+        {value ? (
+          <pre className="editor max-h-[420px] overflow-auto whitespace-pre-wrap break-words px-3.5 py-3 text-zinc-900 dark:text-zinc-100" style={{ minHeight: rows * 20 }}>{value}</pre>
+        ) : (
+          <div className="flex items-center justify-center px-4 text-center text-[13px] text-zinc-400 dark:text-zinc-500" style={{ minHeight: rows * 20 }}>{placeholder}</div>
+        )}
+      </div>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <CopyBtn text={value} />
+        <DownloadBtn text={value} filename={filename} />
+      </div>
+    </div>
+  );
+}
+
+export function ErrorCallout({ title, message, hint, line, column }: { title: string; message: string; hint?: string; line?: number; column?: number }) {
+  return (
+    <div role="alert" className="flex gap-3 rounded-xl border border-red-200 bg-red-50 p-3.5 text-sm dark:border-red-900/60 dark:bg-red-950/30">
+      <AlertTriangle size={18} className="mt-0.5 shrink-0 text-red-500" />
+      <div className="min-w-0">
+        <p className="font-semibold text-red-700 dark:text-red-300">
+          {title}
+          {(line !== undefined && line > 0) && <span className="ml-2 font-mono text-xs font-normal">line {line}{column !== undefined && column > 0 ? `, col ${column}` : ""}</span>}
+        </p>
+        <p className="mt-0.5 break-words font-mono text-[12.5px] text-red-600 dark:text-red-400">{message}</p>
+        {hint && <p className="mt-1 text-[13px] text-red-600/90 dark:text-red-300/90">{hint}</p>}
+      </div>
+    </div>
+  );
+}
+
+export function PrivacyBadge({ local }: { local: boolean }) {
+  return local ? (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[12px] font-medium text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">
+      <ShieldCheck size={13} /> Runs locally — input never leaves your browser
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[12px] font-medium text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
+      <Globe size={13} /> Requires a network request (DNS-over-HTTPS)
+    </span>
+  );
+}
+
+export function Stat({ label, value, mono = true }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">{label}</div>
+      <div className={cn("mt-0.5 break-all text-[13px] font-medium text-zinc-900 dark:text-zinc-100", mono && "font-mono")}>{value}</div>
+    </div>
+  );
+}
+
+export function FavStar({ id }: { id: string }) {
+  const { has, toggle } = useFavorites();
+  const on = has(id);
+  return (
+    <button type="button" onClick={() => toggle(id)} title={on ? "Remove from favorites" : "Add to favorites"}
+      aria-pressed={on} className={cn("rounded-lg p-2 transition", on ? "text-amber-500" : "text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800")}>
+      <Star size={17} fill={on ? "currentColor" : "none"} />
+    </button>
+  );
+}
+
+/* ---------- tool page scaffold ---------- */
+
+export function ToolScaffold({ tool, onExample, children, next }: {
+  tool: Tool; onExample?: () => void; children: ReactNode;
+  next?: { label: string; to: string }[];
+}) {
+  const { push } = useRecents();
+  const auth = useAuth();
+  const category = CATEGORIES.find((item) => item.id === tool.category);
+  useEffect(() => {
+    if (getPrivacyPreferences().recentHistory) push(tool.id);
+    track({ name: "tool_opened", toolId: tool.id, categoryId: tool.category });
+    if (auth.user && platform.usage) void platform.usage.consume(auth.user.id, "tool_runs", 1, tool.id).catch(() => undefined);
+  }, [tool.id, tool.category, push, auth.user]);
+  return (
+    <div className="mx-auto w-full max-w-6xl px-4 pb-20 pt-6 sm:px-6">
+      <nav aria-label="Breadcrumb" className="mb-4 flex items-center gap-1.5 text-[13px] text-zinc-500 dark:text-zinc-400">
+        <a href="#/" data-nav="/" className="hover:text-zinc-900 dark:hover:text-zinc-100">Home</a>
+        <ChevronRight size={13} />
+        <a href={`#/categories/${category?.slug ?? tool.category}`} data-nav={`/categories/${category?.slug ?? tool.category}`} className="capitalize hover:text-zinc-900 dark:hover:text-zinc-100">{category?.name ?? tool.category.replace("-", " ")}</a>
+        <ChevronRight size={13} />
+        <span className="text-zinc-900 dark:text-zinc-100">{tool.name}</span>
+      </nav>
+
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-bold tracking-tight text-zinc-900 sm:text-[28px] dark:text-white">{tool.name}</h1>
+          <p className="mt-1 max-w-2xl text-[14px] leading-relaxed text-zinc-600 dark:text-zinc-400">{tool.longDescription}</p>
+          <div className="mt-2.5 flex flex-wrap items-center gap-2">
+            <PrivacyBadge local={tool.clientSide} />
+            <div className="flex flex-wrap gap-1.5">
+              {tool.capabilities.slice(0, 6).map((c) => (
+                <span key={c} className="rounded-md bg-zinc-100 px-2 py-0.5 text-[11.5px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{c}</span>
+              ))}
+            </div>
+          </div>
+        </div>
+        <FavStar id={tool.id} />
+      </div>
+
+      <div className="fade-up">{children}</div>
+
+      {next && next.length > 0 && (
+        <Panel className="mt-4 p-4">
+          <p className="text-[12px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">You may also want</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {next.map((n) => (
+              <a key={n.to} href={`#${n.to}`} data-nav={n.to}
+                className="inline-flex items-center gap-1 rounded-lg border border-zinc-200 px-3 py-1.5 text-[13px] font-medium text-zinc-700 transition hover:border-emerald-500 hover:text-emerald-700 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-emerald-500 dark:hover:text-emerald-300">
+                → {n.label}
+              </a>
+            ))}
+          </div>
+        </Panel>
+      )}
+
+      <div className="mt-8 grid gap-6 md:grid-cols-2">
+        <div>
+          <h2 className="text-[15px] font-bold text-zinc-900 dark:text-white">How it works</h2>
+          <ol className="mt-2 space-y-1.5">
+            {tool.howItWorks.map((s, i) => (
+              <li key={i} className="flex gap-2.5 text-[13.5px] text-zinc-600 dark:text-zinc-400">
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-100 font-mono text-[11px] font-bold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{i + 1}</span>
+                {s}
+              </li>
+            ))}
+          </ol>
+          {tool.example && onExample && (
+            <button type="button" onClick={onExample}
+              className="mt-3 rounded-lg border border-dashed border-zinc-300 px-3 py-1.5 text-[13px] text-zinc-600 transition hover:border-emerald-500 hover:text-emerald-700 dark:border-zinc-700 dark:text-zinc-400 dark:hover:border-emerald-500 dark:hover:text-emerald-300">
+              Try example: {tool.example.label}
+            </button>
+          )}
+        </div>
+        <div>
+          <h2 className="text-[15px] font-bold text-zinc-900 dark:text-white">Related tools</h2>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            {tool.related.map((id) => TOOL_MAP[id]).filter(Boolean).map((r) => (
+              <a key={r.id} href={`#${r.route}`} data-nav={r.route}
+                className="group rounded-lg border border-zinc-200 p-3 transition hover:border-emerald-500 dark:border-zinc-800 dark:hover:border-emerald-600">
+                <p className="text-[13.5px] font-semibold text-zinc-900 group-hover:text-emerald-700 dark:text-zinc-100 dark:group-hover:text-emerald-300">{r.name}</p>
+                <p className="mt-0.5 line-clamp-2 text-[12.5px] text-zinc-500 dark:text-zinc-400">{r.description}</p>
+              </a>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {tool.faq && tool.faq.length > 0 && (
+        <div className="mt-6">
+          <h2 className="text-[15px] font-bold text-zinc-900 dark:text-white">FAQ</h2>
+          <div className="mt-2 space-y-2">
+            {tool.faq.map((f, i) => (
+              <details key={i} className="rounded-lg border border-zinc-200 px-3.5 py-2.5 dark:border-zinc-800">
+                <summary className="cursor-pointer text-[13.5px] font-medium text-zinc-800 dark:text-zinc-200">{f.q}</summary>
+                <p className="mt-1.5 text-[13px] leading-relaxed text-zinc-600 dark:text-zinc-400">{f.a}</p>
+              </details>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function Split({ left, right }: { left: ReactNode; right: ReactNode }) {
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      <div className="min-w-0">{left}</div>
+      <div className="min-w-0">{right}</div>
+    </div>
+  );
+}
+
+export function ActionBar({ children }: { children: ReactNode }) {
+  return <div className="mt-3 flex flex-wrap items-center gap-2">{children}</div>;
+}

@@ -1,0 +1,30 @@
+[Unit]
+Description=DevUtils web application
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=devutils
+Group=devutils
+WorkingDirectory=/opt/devutils/app
+EnvironmentFile=/etc/devutils/devutils.env
+ExecStart=/usr/bin/node /opt/devutils/app/server/index.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

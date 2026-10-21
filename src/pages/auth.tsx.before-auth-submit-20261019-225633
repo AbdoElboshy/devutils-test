@@ -1,0 +1,115 @@
+import { useMemo, useState, type FormEvent } from "react";
+import { ArrowLeft, Check, KeyRound, LockKeyhole, Mail, ShieldCheck } from "lucide-react";
+import { platform } from "../platform";
+import { platformConfig } from "../platform/config";
+import { useAuth } from "../platform/auth-context";
+import { Btn, Check as CheckControl, ErrorCallout, Field, Panel, TextInput } from "../components/ui";
+
+type AuthMode = "login" | "signup" | "forgot" | "reset" | "verify";
+
+const passwordChecks = (password: string) => [
+  { label: "At least 10 characters", valid: password.length >= 10 },
+  { label: "Upper and lowercase", valid: /[A-Z]/.test(password) && /[a-z]/.test(password) },
+  { label: "A number", valid: /\d/.test(password) },
+  { label: "A symbol", valid: /[^A-Za-z0-9]/.test(password) },
+];
+
+export function AuthPage({ mode, onNav }: { mode: AuthMode; onNav: (route: string) => void }) {
+  const auth = useAuth();
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [remember, setRemember] = useState(true);
+  const [terms, setTerms] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(() => {
+    let reason = "";
+    try { reason = sessionStorage.getItem("du:auth:error") ?? ""; sessionStorage.removeItem("du:auth:error"); } catch { /* private mode */ }
+    if (!reason) reason = new URLSearchParams(window.location.search).get("auth_error") ?? "";
+    return reason === "expired" ? "This email link is expired or has already been used. Request a new one." : reason ? "This authentication link is invalid. Request a new link." : "";
+  });
+  const [message, setMessage] = useState(() => { try { const value = sessionStorage.getItem("du:auth:notice") ?? ""; sessionStorage.removeItem("du:auth:notice"); return value; } catch { return ""; } });
+  const checks = useMemo(() => passwordChecks(password), [password]);
+
+  if (!auth.enabled) return <AccountUnavailable onNav={onNav} />;
+
+  const redirect = (route: string) => `${platformConfig.siteUrl}/?auth_next=${encodeURIComponent(route)}`;
+  const submit = async (event: FormEvent) => {
+    event.preventDefault(); setError(""); setMessage(""); setBusy(true);
+    try {
+      if (mode === "login") {
+        await platform.auth.signInWithPassword({ email: email.trim(), password, remember });
+        await auth.refresh(); onNav("/account");
+      } else if (mode === "signup") {
+        if (!name.trim()) throw new Error("Enter your name.");
+        if (!checks.every((check) => check.valid)) throw new Error("Password does not meet all requirements.");
+        if (password !== confirm) throw new Error("Passwords do not match.");
+        if (!terms) throw new Error("Accept the Terms and Privacy Policy to continue.");
+        const result = await platform.auth.signUp({ name: name.trim(), email: email.trim(), password, emailRedirectTo: redirect("/verify-email") });
+        if (result.verificationRequired) setMessage("Check your email to verify your account. The confirmation link returns you to DevUtils.");
+        else { await auth.refresh(); onNav("/account"); }
+      } else if (mode === "forgot") {
+        await platform.auth.requestPasswordReset(email.trim(), redirect("/reset-password"));
+        setMessage("If an account exists for that address, a password reset link has been sent.");
+      } else if (mode === "reset") {
+        if (!checks.every((check) => check.valid)) throw new Error("Password does not meet all requirements.");
+        if (password !== confirm) throw new Error("Passwords do not match.");
+        await platform.auth.updatePassword(password);
+        try { sessionStorage.setItem("du:auth:notice", "Password updated and previous sessions invalidated. Sign in with your new password."); } catch { /* noop */ }
+        onNav("/login");
+      } else {
+        if (!email.trim()) throw new Error("Enter the email address used during signup.");
+        await platform.auth.resendVerification(email.trim(), redirect("/verify-email"));
+        setMessage("A new verification email has been sent.");
+      }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Authentication request failed."); }
+    finally { setBusy(false); }
+  };
+
+  const heading = { login: "Sign in to DevUtils", signup: "Create your account", forgot: "Reset your password", reset: "Choose a new password", verify: "Verify your email" }[mode];
+  const sub = { login: "Keep workflows, presets and favorites available across devices.", signup: "Core tools stay free and work without an account.", forgot: "We will send a secure, single-use recovery link.", reset: "Use a strong password you do not reuse elsewhere.", verify: auth.user ? "Your email is verified and your session is active." : "Open the confirmation link from your inbox, or request a new one." }[mode];
+
+  return (
+    <div className="mx-auto w-full max-w-md px-4 pb-24 pt-12 sm:px-6">
+      <button type="button" onClick={() => onNav("/")} className="mb-5 inline-flex items-center gap-1 text-[13px] text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"><ArrowLeft size={14} /> Back to public tools</button>
+      <Panel className="p-5 sm:p-6">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-600/10 text-emerald-700 dark:text-emerald-300">{mode === "verify" ? <Mail size={19} /> : mode === "forgot" || mode === "reset" ? <KeyRound size={19} /> : <LockKeyhole size={19} />}</div>
+        <h1 className="mt-4 text-2xl font-extrabold tracking-tight">{heading}</h1>
+        <p className="mt-1 text-[13.5px] leading-relaxed text-zinc-500">{sub}</p>
+        {auth.user && mode === "verify" ? (
+          <div className="mt-5"><div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-[13px] text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200"><Check size={15} className="mr-1 inline" /> Verified as {auth.user.email}</div><Btn variant="primary" className="mt-3 w-full" onClick={() => onNav("/account")}>Open dashboard</Btn></div>
+        ) : (
+          <form className="mt-5 space-y-3" onSubmit={submit}>
+            {mode === "signup" && <Field label="Name"><TextInput value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" required maxLength={100} /></Field>}
+            {["login", "signup", "forgot", "verify"].includes(mode) && <Field label="Email"><TextInput type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" required /></Field>}
+            {["login", "signup", "reset"].includes(mode) && <Field label="Password"><TextInput type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} required /></Field>}
+            {(mode === "signup" || mode === "reset") && <>
+              <div className="grid grid-cols-2 gap-1.5">{checks.map((check) => <span key={check.label} className={`flex items-center gap-1 text-[11.5px] ${check.valid ? "text-emerald-600" : "text-zinc-400"}`}><Check size={11} /> {check.label}</span>)}</div>
+              <Field label="Confirm password"><TextInput type="password" value={confirm} onChange={(event) => setConfirm(event.target.value)} autoComplete="new-password" required /></Field>
+            </>}
+            {mode === "login" && <div className="flex items-center justify-between"><CheckControl label="Keep me signed in" checked={remember} onChange={setRemember} /><button type="button" onClick={() => onNav("/forgot-password")} className="text-[12.5px] font-medium text-emerald-700 dark:text-emerald-300">Forgot password?</button></div>}
+            {mode === "signup" && <CheckControl label="I accept the Terms and Privacy Policy" checked={terms} onChange={setTerms} />}
+            {error && <ErrorCallout title="Request failed" message={error} />}
+            {message && <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-[13px] text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200"><ShieldCheck size={14} className="mr-1 inline" />{message}</div>}
+            <Btn variant="primary" className="w-full" disabled={busy}>{busy ? "Please wait…" : mode === "login" ? "Sign in" : mode === "signup" ? "Create account" : mode === "reset" ? "Update password" : mode === "verify" ? "Resend verification" : "Send reset link"}</Btn>
+          </form>
+        )}
+        {mode === "login" && <p className="mt-4 text-center text-[13px] text-zinc-500">New to DevUtils? <button type="button" onClick={() => onNav("/signup")} className="font-semibold text-emerald-700 dark:text-emerald-300">Create an account</button></p>}
+        {mode === "signup" && <p className="mt-4 text-center text-[13px] text-zinc-500">Already have an account? <button type="button" onClick={() => onNav("/login")} className="font-semibold text-emerald-700 dark:text-emerald-300">Sign in</button></p>}
+      </Panel>
+      <p className="mt-3 text-center text-[11.5px] leading-relaxed text-zinc-400">Authentication is handled by Supabase Auth using managed password hashing, email verification, PKCE recovery, refresh-token rotation and database Row Level Security.</p>
+    </div>
+  );
+}
+
+export function AccountUnavailable({ onNav }: { onNav: (route: string) => void }) {
+  return (
+    <div className="mx-auto w-full max-w-lg px-4 pb-24 pt-16 text-center sm:px-6">
+      <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-zinc-100 text-zinc-500 dark:bg-zinc-900"><LockKeyhole size={20} /></div>
+      <h1 className="mt-4 text-2xl font-extrabold">Authentication configuration error</h1>
+      <p className="mt-2 text-[14px] leading-relaxed text-zinc-500">This deployment is missing its authentication runtime configuration. An administrator must set the required Supabase variables in <code className="font-mono">/etc/devutils/devutils.env</code> and restart DevUtils. Public tools remain available while this is corrected.</p>
+      <Btn variant="primary" className="mt-5" onClick={() => onNav("/tools")}>Continue to tools</Btn>
+    </div>
+  );
+}
