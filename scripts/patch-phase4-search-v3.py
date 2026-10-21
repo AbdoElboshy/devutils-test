@@ -6,8 +6,10 @@
 2. chrome.tsx: when searchDiscovery(q) returns 0 hits, fall back to
    suggestFallback(q, 5) inside the existing hits useMemo — keyboard nav,
    Enter, tracking, and the reason badge all work unchanged.
-3. App.tsx: NotFound gains onNav + 3 category quick-links (no dead ends).
-   BOTH call sites updated (switch case + default case) so tsc stays clean.
+3. App.tsx: NotFound gains optional onNav + 3 category quick-links (no dead
+   ends). onNav is OPTIONAL because ToolView's degenerate default case has
+   no navigation callback in scope; the quick-links simply do not render
+   there. All three call sites stay valid.
 4. verify.ts: 3 new assertions ("P4: search no-result suggestions") -> 226/0.
 
 Idempotent; aborts loudly (exit 1) if any anchor is missing.
@@ -73,8 +75,13 @@ APP_CASE_NEW = 'case "not-found": return <NotFound onSearch={onSearch} onNav={on
 APP_DEFAULT_OLD = 'default: return <NotFound onSearch={onSearch} />;'
 APP_DEFAULT_NEW = 'default: return <NotFound onSearch={onSearch} onNav={onNav} />;'
 
+# ToolView's degenerate default (line ~292): noop onSearch, no onNav in scope.
+# Fixed AFTER the required-prop change lands, so it is a separate anchor.
+APP_TOOLVIEW_DEFAULT_OLD = 'default: return <NotFound onSearch={() => {}} />;'
+APP_TOOLVIEW_DEFAULT_NEW = 'default: return <NotFound onSearch={() => {}} />;'
+
 APP_SIG_OLD = "function NotFound({ onSearch }: { onSearch: () => void }) {"
-APP_SIG_NEW = "function NotFound({ onSearch, onNav }: { onSearch: () => void; onNav: (p: string) => void }) {"
+APP_SIG_NEW = "function NotFound({ onSearch, onNav }: { onSearch: () => void; onNav?: (p: string) => void }) {"
 
 APP_CTA_OLD = (
     "        <Search size={15} /> Search DevUtils\n"
@@ -84,10 +91,14 @@ APP_CTA_OLD = (
 APP_CTA_NEW = (
     "        <Search size={15} /> Search DevUtils\n"
     "      </button>\n"
-    "      <p className=\"mt-6 text-[12px] font-bold uppercase tracking-wide text-zinc-400\">Browse categories</p>\n"
-    "      <div className=\"mt-2 flex flex-wrap justify-center gap-1.5\">\n"
-    "        {CATEGORIES.slice(0, 3).map((c) => <Chip key={c.id} label={c.name} onClick={() => onNav(`/categories/${c.slug}`)} />)}\n"
-    "      </div>\n"
+    "      {onNav && (\n"
+    "        <>\n"
+    "          <p className=\"mt-6 text-[12px] font-bold uppercase tracking-wide text-zinc-400\">Browse categories</p>\n"
+    "          <div className=\"mt-2 flex flex-wrap justify-center gap-1.5\">\n"
+    "            {CATEGORIES.slice(0, 3).map((c) => <Chip key={c.id} label={c.name} onClick={() => onNav(`/categories/${c.slug}`)} />)}\n"
+    "          </div>\n"
+    "        </>\n"
+    "      )}\n"
     "    </div>"
 )
 
@@ -150,7 +161,7 @@ def main():
             if needed not in a:
                 die(f"App.tsx missing symbol: {needed}")
         APP_PATH.write_text(a, encoding="utf-8")
-        print("3: App.tsx NotFound category quick-links added")
+        print("3: App.tsx NotFound optional onNav + category quick-links added")
 
     v = VERIFY_PATH.read_text(encoding="utf-8")
     if "P4: search no-result suggestions" in v:
