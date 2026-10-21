@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build output (committed dist/ is kept for reference only; rebuild with npm run build)
+dist/
+
+# Environment files — never commit real credentials
+.env
+.env.*
+!.env.example
+
+# Local runtime artifacts
+registry.generated.json
+public/sitemap.xml.orig
+
+# Editor / OS noise
+.DS_Store
+*.local
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
