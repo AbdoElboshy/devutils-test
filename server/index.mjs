@@ -29,6 +29,8 @@ import {
   validateServerConfig,
   validateToolOverride,
   isAllowedOrigin,
+  activeAdminRole,
+  hasMinRole,
   isActiveAdminRecord,
   toToolOverrideDbRow,
 } from "./lib.mjs";
@@ -185,23 +187,33 @@ function sendError(res, error, fallback = "Request failed.") {
  * ------------------------------------------------------------------ */
 
 const adminCache = new Map();
-async function isAdmin(userId) {
+async function adminRoleOf(userId) {
   const cached = adminCache.get(userId);
-  if (cached && cached.expires > Date.now()) return cached.value;
+  if (cached && cached.expires > Date.now()) return cached.role ?? (cached.value ? "admin" : null);
   const { data, error } = await service.from("admin_users").select("user_id,role,revoked_at").eq("user_id", userId).maybeSingle();
   if (error) throw error;
-  const value = isActiveAdminRecord(data);
-  adminCache.set(userId, { value, expires: Date.now() + 30_000 });
-  return value;
+  const role = activeAdminRole(data);
+  adminCache.set(userId, { role, expires: Date.now() + 30_000 });
+  return role;
+}
+async function isAdmin(userId) {
+  return (await adminRoleOf(userId)) !== null;
+}
+function requireRole(min = "moderator") {
+  return async (req, res, next) => {
+    try {
+      const role = await adminRoleOf(req.devutils.user.id);
+      if (!role || !hasMinRole(role, min)) return res.status(403).json({ error: "Administrator access required." });
+      req.devutils.isAdmin = true;
+      req.devutils.adminRole = role;
+      next();
+    } catch (error) {
+      sendError(res, error, "Administrator check failed.");
+    }
+  };
 }
 async function requireAdmin(req, res, next) {
-  try {
-    if (!(await isAdmin(req.devutils.user.id))) return res.status(403).json({ error: "Administrator access required." });
-    req.devutils.isAdmin = true;
-    next();
-  } catch (error) {
-    sendError(res, error, "Administrator check failed.");
-  }
+  await requireRole("admin")(req, res, next);
 }
 async function audit(userId, action, metadata = {}) {
   try {
@@ -723,9 +735,9 @@ app.post("/api/analytics/events", analyticsLimit, requireOrigin, requireCsrf, as
  * Administration — Tools Management, categories, analytics, audit
  * ------------------------------------------------------------------ */
 
-app.use("/api/admin", adminLimit, requireOrigin, requireCsrf, requireSession, requireAdmin);
+app.use("/api/admin", adminLimit, requireOrigin, requireCsrf, requireSession, requireRole("moderator"));
 
-app.get("/api/admin/me", (req, res) => res.json({ role: "admin", userId: req.devutils.user.id, email: req.devutils.user.email }));
+app.get("/api/admin/me", (req, res) => res.json({ role: req.devutils.adminRole, userId: req.devutils.user.id, email: req.devutils.user.email }));
 
 app.get("/api/admin/registry", async (_req, res) => {
   try {
@@ -742,7 +754,7 @@ app.get("/api/admin/registry", async (_req, res) => {
   }
 });
 
-app.put("/api/admin/tools/:id", async (req, res) => {
+app.put("/api/admin/tools/:id", requireRole("admin"), async (req, res) => {
   const id = String(req.params.id).slice(0, 64);
   try {
     const overrides = await loadOverrides();
@@ -770,7 +782,7 @@ app.put("/api/admin/tools/:id", async (req, res) => {
   }
 });
 
-app.post("/api/admin/tools/reorder", async (req, res) => {
+app.post("/api/admin/tools/reorder", requireRole("admin"), async (req, res) => {
   const order = Array.isArray(req.body?.order) ? req.body.order.slice(0, 500) : [];
   const known = new Set(baseRegistry.tools.map((tool) => tool.id));
   const invalid = order.filter((entry) => !entry || typeof entry !== "object" || !known.has(String(entry.id)));
@@ -792,7 +804,7 @@ app.post("/api/admin/tools/reorder", async (req, res) => {
   }
 });
 
-app.delete("/api/admin/tools/:id", async (req, res) => {
+app.delete("/api/admin/tools/:id", requireRole("admin"), async (req, res) => {
   const id = String(req.params.id).slice(0, 64);
   const r = await service.from("tool_overrides").delete().eq("id", id);
   if (r.error) return sendError(res, r.error, "Reset failed.");
@@ -801,7 +813,7 @@ app.delete("/api/admin/tools/:id", async (req, res) => {
   res.json({ ok: true });
 });
 
-app.put("/api/admin/categories/:id", async (req, res) => {
+app.put("/api/admin/categories/:id", requireRole("admin"), async (req, res) => {
   const id = String(req.params.id).slice(0, 40);
   if (!baseRegistry.categories.some((category) => category.id === id)) {
     return res.status(400).json({ error: "Category is not registered in this build." });
@@ -824,7 +836,7 @@ app.get("/api/admin/export", async (_req, res) => {
   }
 });
 
-app.post("/api/admin/import", async (req, res) => {
+app.post("/api/admin/import", requireRole("admin"), async (req, res) => {
   const result = validateRegistryImport(req.body, baseRegistry.tools, baseRegistry.categories);
   if (!result.ok) return res.status(400).json({ errors: result.errors });
   const toolCount = result.value.tools.length;
