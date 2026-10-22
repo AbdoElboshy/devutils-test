@@ -1,11 +1,13 @@
 import type {
+  CollectionsRepository,
   FavoritesRepository,
+  PinnedToolsRepository,
   PresetRepository,
   RecentToolsRepository,
   Unsubscribe,
   WorkflowRepository,
 } from "./contracts";
-import type { Favorite, RecentTool, SavedPreset, SavedWorkflow } from "./models";
+import type { Collection, CollectionItem, Favorite, PinnedTool, RecentTool, SavedPreset, SavedWorkflow } from "./models";
 
 const STORAGE_VERSION = 1;
 const KEYS = {
@@ -13,6 +15,8 @@ const KEYS = {
   recent: "du:v1:recent",
   workflows: "du:v1:workflows",
   presets: "du:v1:presets",
+  pinned: "du:v1:pinned",
+  collections: "du:v1:collections",
 } as const;
 
 type Listener<T> = (value: T) => void;
@@ -184,3 +188,138 @@ export const localFavorites = new LocalStorageFavoritesRepository();
 export const localRecentTools = new LocalStorageRecentToolsRepository();
 export const localWorkflows = new LocalStorageWorkflowRepository();
 export const localPresets = new LocalStoragePresetRepository();
+
+function newId(): string {
+  const uuid = globalThis.crypto?.randomUUID;
+  return uuid ? uuid.call(globalThis.crypto) : "col-" + Date.now() + "-" + Math.random().toString(36).slice(2, 10);
+}
+
+export class LocalStoragePinnedToolsRepository implements PinnedToolsRepository {
+  private readonly channel = new Channel(() => this.snapshot());
+
+private snapshot(): PinnedTool[] {
+    return read<PinnedTool[]>(KEYS.pinned, [])
+      .map((item) => ({ toolId: String(item.toolId), sortOrder: Number(item.sortOrder) || 0, createdAt: String(item.createdAt) }))
+      .sort((a, b) => a.sortOrder - b.sortOrder);
+  }
+
+async list(): Promise<PinnedTool[]> { return this.snapshot(); }
+
+async pin(toolId: string): Promise<PinnedTool[]> {
+    const current = this.snapshot();
+    if (current.some((item) => item.toolId === toolId)) return current;
+    const maxOrder = current.length ? Math.max(...current.map((item) => item.sortOrder)) : -1;
+    const next = [...current, { toolId, sortOrder: maxOrder + 1, createdAt: new Date().toISOString() }];
+    write(KEYS.pinned, next);
+    this.channel.emit(next);
+    return next;
+  }
+
+async unpin(toolId: string): Promise<PinnedTool[]> {
+    const next = this.snapshot().filter((item) => item.toolId !== toolId);
+    write(KEYS.pinned, next);
+    this.channel.emit(next);
+    return next;
+  }
+
+async reorder(toolIds: string[]): Promise<PinnedTool[]> {
+    const current = this.snapshot();
+    const byId = new Map(current.map((item) => [item.toolId, item]));
+    const known = toolIds.filter((id) => byId.has(id));
+    const next: PinnedTool[] = known.map((id, index) => ({ ...byId.get(id) as PinnedTool, sortOrder: index }))
+      .concat(current.filter((item) => !known.includes(item.toolId)));
+    write(KEYS.pinned, next);
+    this.channel.emit(next);
+    return next;
+  }
+
+subscribe(listener: Listener<PinnedTool[]>): Unsubscribe { return this.channel.subscribe(listener); }
+}
+
+type StoredCollection = { id: string; name: string; description: string; items: CollectionItem[]; createdAt: string; updatedAt: string };
+
+export class LocalStorageCollectionsRepository implements CollectionsRepository {
+  private readonly channel = new Channel(() => this.view());
+
+private snapshot(): StoredCollection[] {
+    return read<StoredCollection[]>(KEYS.collections, []).map((collection) => ({
+      id: String(collection.id),
+      name: String(collection.name ?? "").slice(0, 60),
+      description: String(collection.description ?? "").slice(0, 200),
+      items: Array.isArray(collection.items)
+        ? collection.items.map((item) => ({ kind: item.kind, targetId: String(item.targetId), sortOrder: Number(item.sortOrder) || 0, addedAt: String(item.addedAt) }))
+        : [],
+      createdAt: String(collection.createdAt),
+      updatedAt: String(collection.updatedAt),
+    }));
+  }
+
+private view(): Collection[] {
+    return this.snapshot().map((collection) => ({ id: collection.id, name: collection.name, description: collection.description, createdAt: collection.createdAt, updatedAt: collection.updatedAt }));
+  }
+
+private stored(id: string): StoredCollection {
+    const found = this.snapshot().find((collection) => collection.id === id);
+    if (!found) throw new Error("Collection not found.");
+    return found;
+  }
+
+async list(): Promise<Collection[]> { return this.view(); }
+
+async create(input: { name: string; description?: string }): Promise<Collection> {
+    const name = input.name.trim().slice(0, 60);
+    if (!name) throw new Error("Collection name cannot be empty.");
+    if (this.snapshot().some((collection) => collection.name === name)) throw new Error("A collection with that name already exists.");
+    const now = new Date().toISOString();
+    const created: StoredCollection = { id: newId(), name, description: (input.description ?? "").slice(0, 200), items: [], createdAt: now, updatedAt: now };
+    write(KEYS.collections, [created, ...this.snapshot()]);
+    const view = this.view();
+    this.channel.emit(view);
+    return view.find((collection) => collection.id === created.id) as Collection;
+  }
+
+async update(id: string, patch: { name?: string; description?: string }): Promise<Collection> {
+    const current = this.snapshot();
+    const target = this.stored(id);
+    const name = patch.name !== undefined ? patch.name.trim().slice(0, 60) : target.name;
+    if (!name) throw new Error("Collection name cannot be empty.");
+    if (patch.name !== undefined && current.some((collection) => collection.id !== id && collection.name === name)) throw new Error("A collection with that name already exists.");
+    const description = patch.description !== undefined ? patch.description.slice(0, 200) : target.description;
+    const next = current.map((collection) => collection.id === id ? { ...collection, name, description, updatedAt: new Date().toISOString() } : collection);
+    write(KEYS.collections, next);
+    const view = this.view();
+    this.channel.emit(view);
+    return view.find((collection) => collection.id === id) as Collection;
+  }
+
+async remove(id: string): Promise<void> {
+    write(KEYS.collections, this.snapshot().filter((collection) => collection.id !== id));
+    this.channel.emit(this.view());
+  }
+
+async items(collectionId: string): Promise<CollectionItem[]> {
+    return this.stored(collectionId).items.slice().sort((a, b) => a.sortOrder - b.sortOrder);
+  }
+
+async addItem(collectionId: string, kind: Favorite["kind"], targetId: string): Promise<CollectionItem[]> {
+    const target = this.stored(collectionId);
+    if (target.items.some((item) => item.targetId === targetId)) return target.items.slice().sort((a, b) => a.sortOrder - b.sortOrder);
+    const maxOrder = target.items.length ? Math.max(...target.items.map((item) => item.sortOrder)) : -1;
+    const added: CollectionItem = { kind, targetId, sortOrder: maxOrder + 1, addedAt: new Date().toISOString() };
+    const next = this.snapshot().map((collection) => collection.id === collectionId ? { ...collection, items: [...collection.items, added], updatedAt: new Date().toISOString() } : collection);
+    write(KEYS.collections, next);
+    return [...target.items, added].sort((a, b) => a.sortOrder - b.sortOrder);
+  }
+
+async removeItem(collectionId: string, targetId: string): Promise<CollectionItem[]> {
+    const target = this.stored(collectionId);
+    const next = this.snapshot().map((collection) => collection.id === collectionId ? { ...collection, items: collection.items.filter((item) => item.targetId !== targetId), updatedAt: new Date().toISOString() } : collection);
+    write(KEYS.collections, next);
+    return target.items.filter((item) => item.targetId !== targetId).sort((a, b) => a.sortOrder - b.sortOrder);
+  }
+
+subscribe(listener: Listener<Collection[]>): Unsubscribe { return this.channel.subscribe(listener); }
+}
+
+export const localPinnedTools = new LocalStoragePinnedToolsRepository();
+export const localCollections = new LocalStorageCollectionsRepository();
