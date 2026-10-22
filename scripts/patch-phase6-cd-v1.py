@@ -493,4 +493,4 @@ else:
     print("  [supabase/migrations/202610220002_revoke_admin.sql] written")
 
 print("\\nWS C + WS D patch complete. Gates: npx tsc --noEmit; npx tsx scripts/verify.ts (247/0); npm run test:server (186/0); npm run build")
-print("Then apply the revoke_admin migration: psql \\"$SUPABASE_SESSION_POOLER_URL\\" -v ON_ERROR_STOP=1 -f supabase/migrations/202610220002_revoke_admin.sql")
+print('Then apply the revoke_admin migration with psql against the pooler URL.')

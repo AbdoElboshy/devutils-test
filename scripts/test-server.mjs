@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import {
   ANALYTICS_EVENTS,
   isAllowedOrigin,
-  activeAdminRole, hasMinRole, isActiveAdminRecord,
+  activeAdminRole, findBrokenTools, hasMinRole, isActiveAdminRecord, mergeFeatureFlags, validatePublishableSlug,
   isCsrfValid,
   toToolOverrideDbRow,
   mergeToolRegistry,
@@ -312,6 +312,10 @@ const ADMIN_ROUTE_GATES = [
   { route: "DELETE /api/admin/tools/:id", min: "admin" },
   { route: "PUT /api/admin/users/:id/role", min: "super_admin" },
   { route: "DELETE /api/admin/users/:id/role", min: "super_admin" },
+  { route: "GET /api/admin/tools/:id/history", min: "moderator" },
+  { route: "POST /api/admin/tools/:id/restore", min: "admin" },
+  { route: "GET /api/admin/flags", min: "moderator" },
+  { route: "PUT /api/admin/flags/:key", min: "admin" },
 ];
 for (const { route, min } of ADMIN_ROUTE_GATES) {
   ok(`gating: ${route} allows ${min} (minimum tier)`, () => assert.equal(hasMinRole(min, min), true));
@@ -321,6 +325,21 @@ for (const { route, min } of ADMIN_ROUTE_GATES) {
   if (min !== "moderator") ok(`gating: ${route} rejects moderator (read-only)`, () => assert.equal(hasMinRole("moderator", min), false));
   if (min === "super_admin") ok(`gating: ${route} rejects admin`, () => assert.equal(hasMinRole("admin", min), false));
 }
+
+/* ---------------- phase6 WS C/D: publish validation, flags, broken-tool scan ---------------- */
+ok("validatePublishableSlug accepts a clean slug", () => assert.equal(validatePublishableSlug("json-formatter", { id: "json_formatter" }).ok, true));
+ok("validatePublishableSlug rejects uppercase", () => assert.equal(validatePublishableSlug("Bad Slug", { id: "t1" }).ok, false));
+ok("validatePublishableSlug rejects a slug owned by another tool", () => assert.equal(validatePublishableSlug("json-formatter", { id: "t2", existingSlugs: new Map([["json-formatter", "t1"]]) }).ok, false));
+ok("validatePublishableSlug allows a slug owned by the same tool", () => assert.equal(validatePublishableSlug("json-formatter", { id: "t1", existingSlugs: new Map([["json-formatter", "t1"]]) }).ok, true));
+ok("validatePublishableSlug rejects a too-short slug", () => assert.equal(validatePublishableSlug("a", { id: "t1" }).ok, false));
+ok("validatePublishableSlug returns null value for empty slug", () => assert.equal(validatePublishableSlug("", { id: "t1" }).value, null));
+ok("mergeFeatureFlags applies a known override", () => assert.equal(mergeFeatureFlags({ api: false }, [{ key: "api", enabled: true }]).api, true));
+ok("mergeFeatureFlags ignores unknown keys", () => assert.deepEqual(mergeFeatureFlags({ api: false }, [{ key: "nope", enabled: true }]), { api: false }));
+ok("mergeFeatureFlags ignores malformed rows", () => assert.deepEqual(mergeFeatureFlags({ api: false }, [null, 7]), { api: false }));
+ok("findBrokenTools returns empty for a clean registry", () => assert.equal(findBrokenTools([{ id: "a", route: "/a", visibility: "published" }], ["a"]).length, 0));
+ok("findBrokenTools flags a duplicate route", () => assert.equal(findBrokenTools([{ id: "a", route: "/x", visibility: "published" }, { id: "b", route: "/x", visibility: "published" }], ["a", "b"]).length, 1));
+ok("findBrokenTools flags a tool missing from the base registry", () => assert.equal(findBrokenTools([{ id: "ghost", route: "/ghost", visibility: "published" }], ["a"]).length, 1));
+ok("findBrokenTools skips non-published tools", () => assert.equal(findBrokenTools([{ id: "ghost", route: "/ghost", visibility: "draft" }], ["a"]).length, 0));
 
 ok("missing administrator record rejected", () => assert.equal(isActiveAdminRecord(null), false));
 

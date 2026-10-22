@@ -6,7 +6,7 @@ import { ROUTE_MAP, getCategory } from "./registry";
 import { isFeatureEnabled } from "../platform/features";
 import type { AccountSection } from "../pages/account";
 
-export const ADMIN_SECTIONS = ["overview", "tools", "categories", "users", "analytics", "audit", "health"] as const;
+export const ADMIN_SECTIONS = ["overview", "tools", "categories", "users", "flags", "analytics", "audit", "health"] as const;
 export type AdminSection = (typeof ADMIN_SECTIONS)[number];
 
 export const ACCOUNT_SECTIONS: AccountSection[] = [

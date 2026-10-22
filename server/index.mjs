@@ -33,6 +33,9 @@ import {
   hasMinRole,
   isActiveAdminRecord,
   toToolOverrideDbRow,
+  validatePublishableSlug,
+  mergeFeatureFlags,
+  findBrokenTools,
 } from "./lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -283,9 +286,12 @@ app.get("/api/health", async (_req, res) => {
     res.status(503).json({ status: "degraded" });
   }
 });
-app.get("/runtime-config.js", (_req, res) => {
+app.get("/runtime-config.js", async (_req, res) => {
+  let flags = {};
+  try { flags = await effectiveFlags(); } catch { flags = {}; }
+  const payload = { authMode: "server", accountsEnabled: true, flags };
   res.type("application/javascript").set("Cache-Control", "no-store")
-    .send('window.__DEVUTILS_CONFIG__={"authMode":"server","accountsEnabled":true};');
+    .send(`window.__DEVUTILS_CONFIG__=${JSON.stringify(payload)};`);
 });
 app.get("/api/tools/registry", async (_req, res) => {
   try {
@@ -774,7 +780,21 @@ app.put("/api/admin/tools/:id", requireRole("admin"), async (req, res) => {
     const r = await service.from("tool_overrides").upsert(row, { onConflict: "id" }).select().single();
     if (r.error) return sendError(res, r.error, "Tool update failed.");
     invalidateRegistry();
+    /* WS C: publish-time broken-route validation. If this override would create
+       a duplicate or unresolvable public route, roll it back so the public
+       registry can never break. */
+    const merged = await registry({ includeUnpublished: true, maxAgeMs: 0 });
+    const broken = findBrokenTools(merged.allTools, baseRegistry.tools.map((tool) => tool.id));
+    if (broken.length) {
+      await service.from("tool_overrides").delete().eq("id", id);
+      invalidateRegistry();
+      return res.status(400).json({ errors: broken.map((entry) => `Tool ${entry.id}: ${entry.reason}`) });
+    }
     const changed = previous ? (previous.visibility ?? "published") !== (row.visibility ?? "published") || previous.enabled !== row.enabled : true;
+    /* WS C: version history - one row per saved change. Best-effort: the
+       override is already committed; a history write failure is logged, not fatal. */
+    const history = await service.from("tool_override_versions").insert({ tool_id: id, patch: row, change_kind: changed ? "visibility" : "update", changed_by: req.devutils.user.id });
+    if (history.error) console.error("[DevUtils] Version history write failed:", { tool_id: id, code: history.error.code ?? "unknown" });
     if (!(await recordAdminAuditOrRespond(res, req.devutils.user.id, changed ? "tool_visibility_changed" : "tool_config_changed", { tool_id: id, visibility: row.visibility ?? "published" }))) return;
     res.json(r.data);
   } catch (error) {
@@ -806,6 +826,12 @@ app.post("/api/admin/tools/reorder", requireRole("admin"), async (req, res) => {
 
 app.delete("/api/admin/tools/:id", requireRole("admin"), async (req, res) => {
   const id = String(req.params.id).slice(0, 64);
+  const existing = await service.from("tool_overrides").select("*").eq("id", id).maybeSingle();
+  if (existing.error) return sendError(res, existing.error, "Reset failed.");
+  if (existing.data) {
+    const history = await service.from("tool_override_versions").insert({ tool_id: id, patch: existing.data, change_kind: "reset", changed_by: req.devutils.user.id });
+    if (history.error) console.error("[DevUtils] Version history write failed:", { tool_id: id, code: history.error.code ?? "unknown" });
+  }
   const r = await service.from("tool_overrides").delete().eq("id", id);
   if (r.error) return sendError(res, r.error, "Reset failed.");
   invalidateRegistry();
@@ -934,13 +960,20 @@ app.get("/api/admin/audit", async (req, res) => {
 
 app.get("/api/admin/health", async (_req, res) => {
   const checks = {};
-  const tables = ["profiles", "favorites", "saved_workflows", "saved_presets", "usage_records", "api_keys", "audit_logs", "tool_overrides", "category_overrides", "analytics_events", "admin_users"];
+  const tables = ["profiles", "favorites", "saved_workflows", "saved_presets", "usage_records", "api_keys", "audit_logs", "tool_overrides", "category_overrides", "analytics_events", "admin_users", "feature_flags", "tool_override_versions"];
   for (const table of tables) {
     const r = await service.from(table).select("*", { count: "exact", head: true });
     checks[table] = r.error ? { ok: false, error: "unavailable" } : { ok: true, rows: r.count ?? 0 };
   }
-  const ok = Object.values(checks).every((check) => check.ok);
-  res.status(ok ? 200 : 503).json({ status: ok ? "ok" : "degraded", checks, migrationRequired: !checks.tool_overrides.ok || !checks.admin_users.ok || !checks.analytics_events.ok });
+  let brokenTools = [];
+  try {
+    const merged = await registry({ includeUnpublished: true, maxAgeMs: 0 });
+    brokenTools = findBrokenTools(merged.allTools, baseRegistry.tools.map((tool) => tool.id));
+  } catch {
+    brokenTools = [{ id: "unknown", reason: "registry unavailable" }];
+  }
+  const ok = Object.values(checks).every((check) => check.ok) && brokenTools.length === 0;
+  res.status(ok ? 200 : 503).json({ status: ok ? "ok" : "degraded", checks, brokenTools, migrationRequired: !checks.tool_overrides.ok || !checks.admin_users.ok || !checks.analytics_events.ok });
 });
 
 /* ------------------------------------------------------------------ *
@@ -1071,6 +1104,98 @@ app.delete("/api/admin/users/:id/role", requireRole("super_admin"), async (req, 
     res.json({ ok: true });
   } catch (error) {
     sendError(res, error, "Role revocation failed.");
+  }
+});
+
+/* ---------------- Phase 6 WS C/D: version history, flags ---------------- */
+
+const STATIC_FEATURE_FLAGS = Object.freeze({ new_search: true, accounts: true, pro: false, api: false, workflows: true, presets: true, teams: false, ai_explain: false, browser_extension: false, grafana_tools: true, zabbix_tools: true, prometheus_tools: true, loki_tools: true, observability_tools: true, cloud_tools: true });
+
+let flagsCache = { at: 0, value: null };
+
+async function dbFlags() {
+  const r = await service.from("feature_flags").select("key,enabled,updated_at");
+  if (r.error) throw r.error;
+  return r.data ?? [];
+}
+
+async function effectiveFlags() {
+  if (flagsCache.value && Date.now() - flagsCache.at < 15_000) return flagsCache.value;
+  const value = mergeFeatureFlags(STATIC_FEATURE_FLAGS, await dbFlags());
+  flagsCache = { at: Date.now(), value };
+  return value;
+}
+
+app.get("/api/flags", async (_req, res) => {
+  try {
+    const flags = await effectiveFlags();
+    res.type("application/json").set("Cache-Control", "public, max-age=60").json(flags);
+  } catch {
+    res.type("application/json").set("Cache-Control", "public, max-age=60").json({});
+  }
+});
+
+app.get("/api/admin/tools/:id/history", requireRole("moderator"), async (req, res) => {
+  const id = String(req.params.id).slice(0, 64);
+  const r = await service.from("tool_override_versions").select("id,patch,change_kind,changed_by,created_at").eq("tool_id", id).order("created_at", { ascending: false }).limit(50);
+  if (r.error) return sendError(res, r.error, "History unavailable.");
+  res.json(r.data);
+});
+
+app.post("/api/admin/tools/:id/restore", requireRole("admin"), async (req, res) => {
+  const id = String(req.params.id).slice(0, 64);
+  const versionId = Number(req.body?.versionId);
+  try {
+    if (!Number.isInteger(versionId) || versionId < 1) return res.status(400).json({ error: "versionId must be a positive integer." });
+    const v = await service.from("tool_override_versions").select("patch,tool_id").eq("id", versionId).eq("tool_id", id).maybeSingle();
+    if (v.error) return sendError(res, v.error, "Restore failed.");
+    if (!v.data) return res.status(404).json({ error: "Version not found for this tool." });
+    const restored = toToolOverrideDbRow({ id, ...v.data.patch, visibility: v.data.patch.visibility ?? "draft" }, req.devutils.user.id, new Date().toISOString());
+    const r = await service.from("tool_overrides").upsert(restored, { onConflict: "id" }).select().single();
+    if (r.error) return sendError(res, r.error, "Restore failed.");
+    invalidateRegistry();
+    const merged = await registry({ includeUnpublished: true, maxAgeMs: 0 });
+    const broken = findBrokenTools(merged.allTools, baseRegistry.tools.map((tool) => tool.id));
+    if (broken.length) {
+      await service.from("tool_overrides").delete().eq("id", id);
+      invalidateRegistry();
+      return res.status(400).json({ errors: broken.map((entry) => `Tool ${entry.id}: ${entry.reason}`) });
+    }
+    const history = await service.from("tool_override_versions").insert({ tool_id: id, patch: restored, change_kind: "restore", changed_by: req.devutils.user.id });
+    if (history.error) console.error("[DevUtils] Version history write failed:", { tool_id: id, code: history.error.code ?? "unknown" });
+    if (!(await recordAdminAuditOrRespond(res, req.devutils.user.id, "tool_version_restored", { tool_id: id, version_id: versionId }))) return;
+    res.json(r.data);
+  } catch (error) {
+    sendError(res, error, "Restore failed.");
+  }
+});
+
+app.get("/api/admin/flags", requireRole("moderator"), async (_req, res) => {
+  try {
+    const rows = await dbFlags();
+    const effective = mergeFeatureFlags(STATIC_FEATURE_FLAGS, rows);
+    res.json(Object.keys(STATIC_FEATURE_FLAGS).map((key) => {
+      const row = rows.find((entry) => entry.key === key);
+      return { key, enabled: Boolean(effective[key]), defaultEnabled: Boolean(STATIC_FEATURE_FLAGS[key]), overridden: Boolean(row), updatedAt: row?.updated_at ?? null };
+    }));
+  } catch (error) {
+    sendError(res, error, "Flags unavailable.");
+  }
+});
+
+app.put("/api/admin/flags/:key", requireRole("admin"), async (req, res) => {
+  const key = String(req.params.key).slice(0, 64);
+  const enabled = Boolean(req.body?.enabled);
+  try {
+    if (!/^[a-z0-9]+(_[a-z0-9]+)*$/.test(key)) return res.status(400).json({ error: "Invalid flag key." });
+    if (!Object.prototype.hasOwnProperty.call(STATIC_FEATURE_FLAGS, key)) return res.status(400).json({ error: "Unknown feature flag." });
+    const r = await service.from("feature_flags").upsert({ key, enabled, updated_by: req.devutils.user.id, updated_at: new Date().toISOString() }, { onConflict: "key" }).select().single();
+    if (r.error) return sendError(res, r.error, "Flag update failed.");
+    flagsCache = { at: 0, value: null };
+    if (!(await recordAdminAuditOrRespond(res, req.devutils.user.id, "feature_flag_changed", { flag: key, enabled }))) return;
+    res.json(r.data);
+  } catch (error) {
+    sendError(res, error, "Flag update failed.");
   }
 });
 

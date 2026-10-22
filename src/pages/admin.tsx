@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity, AlertTriangle, ArrowDownUp, Check, Download, Gauge, Layers, Lock,
-  Pencil, RefreshCw, Search, ShieldCheck, SlidersHorizontal, Trash2, Upload, Users, X,
+  Flag, Pencil, RefreshCw, Search, ShieldCheck, SlidersHorizontal, Trash2, Upload, Users, X,
 } from "lucide-react";
 import { useAuth } from "../platform/auth-context";
 import {
-  exportRegistry, fetchAdminAnalytics, fetchAdminAudit, fetchAdminHealth, fetchAdminMe,
-  fetchAdminRegistry, fetchAdminUsers, importRegistry, reactivateUser, reorderTools,
-  resetToolOverride, revokeUserAccess, revokeUserRole, saveCategoryOverride, saveToolOverride,
-  setUserRole, suspendUser, type AdminAnalytics, type AdminHealth, type AdminRegistry,
-  type AdminUser, type AdminUsersPage, type AuditEntry, type CategoryOverlay, type ToolOverlay,
+  exportRegistry, fetchAdminAnalytics, fetchAdminAudit, fetchAdminFlags, fetchAdminHealth, fetchAdminMe,
+  fetchAdminRegistry, fetchAdminUsers, fetchToolHistory, importRegistry, reactivateUser, reorderTools,
+  resetToolOverride, restoreToolVersion, revokeUserAccess, revokeUserRole, saveCategoryOverride,
+  saveToolOverride, setFeatureFlag, setUserRole, suspendUser, type AdminAnalytics, type AdminFlag,
+  type AdminHealth, type AdminRegistry, type AdminUser, type AdminUsersPage, type AuditEntry,
+  type CategoryOverlay, type ToolOverlay, type ToolVersion,
 } from "../platform/admin-api";
 import { applyRegistryOverlays, CATEGORIES, loadRegistryOverlays } from "../lib/registry";
 import { downloadFile } from "../lib/engine";
@@ -17,13 +18,14 @@ import { Btn, ErrorCallout, Field, Panel, Select, Stat, TextInput, inputCls } fr
 import { AccountUnavailable } from "./auth";
 import { cn } from "../utils/cn";
 
-type Section = "overview" | "tools" | "categories" | "users" | "analytics" | "audit" | "health";
+type Section = "overview" | "tools" | "categories" | "users" | "flags" | "analytics" | "audit" | "health";
 
 const SECTIONS: { id: Section; label: string; icon: typeof Gauge; hint: string }[] = [
   { id: "overview", label: "Overview", icon: Gauge, hint: "Live counts and configuration state" },
   { id: "tools", label: "Tools", icon: Layers, hint: "Metadata, ordering, visibility" },
   { id: "categories", label: "Categories", icon: SlidersHorizontal, hint: "Grouping and display order" },
   { id: "users", label: "Users", icon: Users, hint: "Search, suspension, and roles (admin+)" },
+  { id: "flags", label: "Flags & history", icon: Flag, hint: "Feature toggles and tool version history (admin+)" },
   { id: "analytics", label: "Analytics", icon: Activity, hint: "Real usage, no fabricated numbers" },
   { id: "audit", label: "Audit log", icon: ShieldCheck, hint: "Administrative and account events" },
   { id: "health", label: "Health", icon: AlertTriangle, hint: "Dependency and migration checks" },
@@ -92,7 +94,7 @@ export function AdminPage({ section, onNav }: { section: Section; onNav: (route:
 
       <div className="mt-5 grid gap-5 lg:grid-cols-[196px_1fr]">
         <nav aria-label="Admin sections" className="flex gap-1 overflow-x-auto pb-1 lg:block lg:space-y-1">
-          {(role === "moderator" ? SECTIONS.filter((item) => item.id !== "users") : SECTIONS).map((item) => (
+          {(role === "moderator" ? SECTIONS.filter((item) => item.id !== "users" && item.id !== "flags") : SECTIONS).map((item) => (
             <button key={item.id} type="button" onClick={() => onNav(item.id === "overview" ? "/admin" : `/admin/${item.id}`)} aria-current={section === item.id ? "page" : undefined}
               className={cn("flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-[13px] font-medium transition lg:w-full",
                 section === item.id ? "bg-zinc-900 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-900" : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900")}>
@@ -107,6 +109,7 @@ export function AdminPage({ section, onNav }: { section: Section; onNav: (route:
               : section === "tools" ? <ToolsManager registry={registry} onSaved={refresh} onError={setError} />
                 : section === "categories" ? <CategoryManager registry={registry} onSaved={refresh} onError={setError} />
               : section === "users" ? <UsersManager />
+              : section === "flags" ? <FlagsManager registry={registry} />
                   : section === "analytics" ? <Analytics />
                     : section === "audit" ? <AuditLog />
                       : <Health />}

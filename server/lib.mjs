@@ -442,3 +442,44 @@ export function safeCollectionItemInput(body) {
   if (!kind || !targetId) return null;
   return { kind, targetId };
 }
+
+/* ---------------- Phase 6 WS C/D: publish validation, flags, broken-tool scan ---------------- */
+
+export function validatePublishableSlug(slug, { id, existingSlugs = new Map() } = {}) {
+  const errors = [];
+  const value = String(slug ?? "").trim();
+  if (!value) return { ok: true, value: null, errors };
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)) errors.push("Slug must be lowercase words separated by single hyphens.");
+  if (value.length < 2 || value.length > 80) errors.push("Slug must be between 2 and 80 characters.");
+  const owner = existingSlugs.get(value);
+  if (owner && owner !== id) errors.push("Slug is already used by another tool.");
+  if (errors.length) return { ok: false, value: null, errors };
+  return { ok: true, value, errors };
+}
+
+export function mergeFeatureFlags(defaults, rows) {
+  const out = { ...defaults };
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (row && typeof row.key === "string" && Object.prototype.hasOwnProperty.call(out, row.key)) {
+      out[row.key] = Boolean(row.enabled);
+    }
+  }
+  return out;
+}
+
+export function findBrokenTools(tools, baseToolIds = []) {
+  const base = new Set(baseToolIds);
+  const byRoute = new Map();
+  const broken = [];
+  for (const tool of Array.isArray(tools) ? tools : []) {
+    if (!tool || typeof tool !== "object") continue;
+    if (tool.visibility !== "published") continue;
+    if (base.size && !base.has(tool.id)) { broken.push({ id: String(tool.id), reason: "not present in the base registry" }); continue; }
+    const route = String(tool.route ?? tool.slug ?? tool.id);
+    const previous = byRoute.get(route);
+    if (previous) { broken.push({ id: String(tool.id), reason: `route ${route} duplicates tool ${previous}` }); continue; }
+    if (!/^\/[a-z0-9-]+$/.test(route)) { broken.push({ id: String(tool.id), reason: `route ${route} is not a valid tool route` }); continue; }
+    byRoute.set(route, String(tool.id));
+  }
+  return broken;
+}
