@@ -6,10 +6,10 @@ import {
   KeyRound, GitBranch, Workflow, FileKey, CalendarClock as CronIcon, Hash, SquareTerminal,
   Plug, Gauge, Globe2, FileDigit, ArrowLeftRight, KeySquare, Fingerprint, ShieldAlert,
   Award, QrCode, Repeat, TableProperties, Braces as BracesIcon, ALargeSmall, Timer,
-  Earth, CalendarDays, Siren, LayoutGrid, Activity, BarChart3, Cloud,
+  Earth, CalendarDays, Siren, LayoutGrid, Activity, BarChart3, Cloud, Pin,
 } from "lucide-react";
 import { Header, Footer, CommandPalette } from "./components/chrome";
-import { useEntityFavorite, useFavorites, useRecents, Panel } from "./components/ui";
+import { useEntityFavorite, useFavorites, usePinned, useRecents, Panel } from "./components/ui";
 import { TOOLS, CATEGORIES, TOOL_MAP, ROUTE_MAP, getCategory, getToolsByCategory, getRelated, getRegistryVersion, loadRegistryOverlays, subscribeRegistry, type Tool } from "./lib/registry";
 import { AdminPage } from "./pages/admin";
 import { cn } from "./utils/cn";
@@ -298,6 +298,7 @@ function ToolView({ id }: { id: string }) {
 export function ToolCard({ tool, onNav }: { tool: Tool; onNav: (p: string) => void }) {
   const Icon = TOOL_ICONS[tool.id] ?? Braces;
   const { has, toggle } = useFavorites();
+  const { has: hasPin, toggle: togglePin } = usePinned();
   return (
     <div className="group relative flex flex-col rounded-xl border border-zinc-200 bg-white p-4 transition hover:border-emerald-500/60 hover:shadow-[0_4px_16px_rgba(0,0,0,0.06)] dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-emerald-600/60">
       <div className="flex items-start gap-3">
@@ -314,6 +315,10 @@ export function ToolCard({ tool, onNav }: { tool: Tool; onNav: (p: string) => vo
           className={cn("rounded-md p-1", has(tool.id) ? "text-amber-400" : "text-zinc-300 opacity-0 hover:text-zinc-500 group-hover:opacity-100 dark:text-zinc-600")}>
           <Star size={15} fill={has(tool.id) ? "currentColor" : "none"} />
         </button>
+        <button type="button" onClick={() => togglePin(tool.id)} aria-label="Pin tool" aria-pressed={hasPin(tool.id)}
+          className={cn("rounded-md p-1", hasPin(tool.id) ? "text-emerald-500" : "text-zinc-300 opacity-0 hover:text-zinc-500 group-hover:opacity-100 dark:text-zinc-600")}>
+          <Pin size={15} fill={hasPin(tool.id) ? "currentColor" : "none"} />
+        </button>
       </div>
       <div className="mt-2.5 flex flex-wrap gap-1">
         {tool.capabilities.slice(0, 4).map((c) => (
@@ -329,9 +334,11 @@ export function ToolCard({ tool, onNav }: { tool: Tool; onNav: (p: string) => vo
 function Home({ onNav, onSearch }: { onNav: (p: string) => void; onSearch: () => void }) {
   const { favs } = useFavorites();
   const { recents } = useRecents();
+  const { pinned } = usePinned();
   const popular = useMemo(() => TOOLS.filter((t) => t.featured), []);
   const recentTools = recents.map((id) => TOOL_MAP[id]).filter(Boolean).slice(0, 4);
   const favTools = favs.map((id) => TOOL_MAP[id]).filter(Boolean).slice(0, 4);
+  const pinnedTools = pinned.map((id) => TOOL_MAP[id]).filter(Boolean).slice(0, 6);
 
   return (
     <div>
@@ -368,9 +375,17 @@ function Home({ onNav, onSearch }: { onNav: (p: string) => void; onSearch: () =>
       </section>
 
       <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
-        {(recentTools.length > 0 || favTools.length > 0) && (
+        {(recentTools.length > 0 || favTools.length > 0 || pinnedTools.length > 0) && (
           <section className="pt-8">
             <div className="grid gap-4 sm:grid-cols-2">
+                            {pinnedTools.length > 0 && (
+                <div>
+                  <h2 className="flex items-center gap-1.5 text-[13px] font-bold uppercase tracking-wide text-zinc-500"><Pin size={13} /> Pinned</h2>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {pinnedTools.map((t) => <Chip key={t.id} label={t.name} onClick={() => onNav(t.route)} />)}
+                  </div>
+                </div>
+              )}
               {recentTools.length > 0 && (
                 <div>
                   <h2 className="flex items-center gap-1.5 text-[13px] font-bold uppercase tracking-wide text-zinc-500"><Clock size={13} /> Recent</h2>
