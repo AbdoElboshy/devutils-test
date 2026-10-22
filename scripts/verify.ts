@@ -529,5 +529,13 @@ auth.emit(null);
   unsubscribe();
 }
 
+// --- P5: account routes for collections + consolidated settings ---
+{
+  const collectionsRoute = classifyRoute("/account/collections", false);
+  if (collectionsRoute.kind !== "account") throw new Error("expected account classification");
+  eq("routes: collections account section classifies", collectionsRoute.section, "collections");
+  eq("routes: security account URL still classifies as account", classifyRoute("/account/security", false).kind, "account");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
