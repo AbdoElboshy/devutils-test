@@ -23,6 +23,9 @@ import { WORKFLOW_TEMPLATES } from "../src/data/workflows";
 import { capabilities, isFeatureEnabled } from "../src/platform/features";
 import { awsCliCommand, awsSecurityGroupRule, buildArn, buildIamPolicy, buildLogQl, buildPromQl, calculateMetric, calculateSlo, grafanaDashboard, grafanaTemplate, infrastructureName, parseArn, parseAzureResourceId, parseGcpResource, parseS3Url, percentile, prometheusRule, prometheusScrapeConfig, validateGrafanaDashboard, zabbixApiExample, zabbixExpression, zabbixItem, zabbixLinuxTemplate, zabbixTemplate, zabbixTrigger } from "../src/lib/devops-platform";
 import { AnonymousAuthProvider } from "../src/platform/auth";
+import { AdaptivePinnedToolsRepository } from "../src/platform/adaptive-repositories";
+import { localPinnedTools, localCollections } from "../src/platform/local-repositories";
+import type { AuthProvider, PinnedToolsRepository } from "../src/platform/contracts";
 import { classifyRoute } from "../src/lib/routes";
 
 let pass = 0, fail = 0;
@@ -443,5 +446,88 @@ eq("AWS search", searchTools("aws arn", 20).some((hit) => hit.tool.id === "aws-a
   eq("a11y: shared switch/tablist/aria-pressed", uiSrc.includes('role="switch"') && uiSrc.includes('role="tablist"') && uiSrc.includes("aria-pressed"), true);
   eq("a11y: tabs roving tabIndex", uiSrc.includes("tabIndex={active === t.id ? 0 : -1}"), true);
 }
+
+// --- P5: pinned tools + collections (real local repos, two-user isolation) ---
+{
+  // Minimal in-memory localStorage so repository logic runs in Node.
+  class MemoryStorage {
+    map = new Map<string, string>();
+    getItem(key: string) { return this.map.has(key) ? this.map.get(key)! : null; }
+    setItem(key: string, value: string) { this.map.set(key, value); }
+    removeItem(key: string) { this.map.delete(key); }
+  }
+  (globalThis as { localStorage?: unknown }).localStorage = new MemoryStorage();
+
+const pinned = localPinnedTools;
+  await pinned.pin("json");
+  await pinned.pin("regex");
+  eq("p5: pin order preserved", (await pinned.list()).map((x) => x.toolId), ["json", "regex"]);
+  eq("p5: reorder applied", (await pinned.reorder(["regex", "json"])).map((x) => x.toolId), ["regex", "json"]);
+  eq("p5: unpin removes only the target", (await pinned.unpin("json")).map((x) => x.toolId), ["regex"]);
+
+const collections = localCollections;
+  const created = await collections.create({ name: "Ops", description: "Daily" });
+  eq("p5: collection created", (await collections.list()).map((c) => c.name), ["Ops"]);
+  let duplicateRejected = false;
+  await collections.create({ name: "Ops" }).then(() => { duplicateRejected = false; }, () => { duplicateRejected = true; });
+  eq("p5: duplicate collection name rejected", duplicateRejected, true);
+  await collections.addItem(created.id, "tool", "json");
+  eq("p5: collection item added", (await collections.items(created.id)).map((i) => i.targetId), ["json"]);
+  await collections.removeItem(created.id, "json");
+  eq("p5: collection item removed", (await collections.items(created.id)).length, 0);
+  await collections.update(created.id, { description: "Weekly" });
+  eq("p5: collection update persists", (await collections.list())[0]!.description, "Weekly");
+  await collections.remove(created.id);
+  eq("p5: collection removed", (await collections.list()).length, 0);
+
+// Two-user isolation through the real adaptive layer.
+  const makeAuth = () => {
+    let listener: ((user: { id: string } | null) => void) | null = null;
+    const auth = {
+      subscribe: (fn: (user: { id: string } | null) => void) => { listener = fn; return () => { listener = null; }; },
+      emit: (user: { id: string } | null) => { listener?.(user); },
+    };
+    return auth as unknown as AuthProvider & { emit: (user: { id: string } | null) => void };
+  };
+  class StubRepo {
+    calls: string[] = [];
+    scope: string | null | undefined;
+    items: { toolId: string; sortOrder: number; createdAt: string }[] = [];
+    async list() { this.calls.push("list"); return this.items.slice(); }
+    async pin(id: string) { this.calls.push("pin:" + id); return this.items.slice(); }
+    async unpin(id: string) { this.calls.push("unpin:" + id); return this.items.slice(); }
+    async reorder(ids: string[]) { this.calls.push("reorder:" + ids.join("+")); return this.items.slice(); }
+    subscribe(listener: (items: { toolId: string; sortOrder: number; createdAt: string }[]) => void) { this.calls.push("subscribe"); listener(this.items.slice()); return () => {}; }
+    setUserScope(id: string | null) { this.scope = id; this.calls.push("scope:" + String(id)); }
+  }
+
+const auth = makeAuth();
+  const local = new StubRepo();
+  const cloud = new StubRepo();
+  local.items = [{ toolId: "local-only", sortOrder: 0, createdAt: "" }];
+  const repo = new AdaptivePinnedToolsRepository(
+    auth,
+    local as unknown as PinnedToolsRepository,
+    cloud as unknown as PinnedToolsRepository & { setUserScope?: (userId: string | null) => void },
+  );
+  await repo.list();
+  eq("p5 isolation: anonymous routes to local", local.calls.includes("list") && cloud.calls.length === 0, true);
+
+cloud.items = [{ toolId: "a-item", sortOrder: 0, createdAt: "" }];
+  auth.emit({ id: "user-a" });
+  const seen: string[] = [];
+  const unsubscribe = repo.subscribe((items) => { seen.push(items.map((i) => i.toolId).join(",")); });
+  eq("p5 isolation: sign-in hands cloud scope user-a", cloud.scope, "user-a");
+  await repo.list();
+  eq("p5 isolation: signed-in routes to cloud", cloud.calls.includes("list") && local.calls.filter((c) => c === "list").length === 1, true);
+
+auth.emit(null);
+  eq("p5 isolation: sign-out rescopes cloud to null", cloud.scope, null);
+  cloud.items = [{ toolId: "b-item", sortOrder: 0, createdAt: "" }];
+  auth.emit({ id: "user-b" });
+  eq("p5 isolation: switch sequence is A, cleared, local, cleared, B", seen.join(" | "), "a-item |  | local-only |  | b-item");
+  unsubscribe();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
