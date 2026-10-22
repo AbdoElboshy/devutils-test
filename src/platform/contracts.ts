@@ -2,11 +2,14 @@ import type {
   ApiKeyMetadata,
   AccountSession,
   AuditLog,
+  Collection,
+  CollectionItem,
   Favorite,
   Feature,
   IntegrationConnection,
   LimitKey,
   PlanId,
+  PinnedTool,
   Profile,
   RecentTool,
   SavedPreset,
@@ -160,4 +163,23 @@ export interface BatchProcessor {
 export interface SyncProvider {
   push(scope: "favorites" | "workflows" | "presets" | "preferences", records: unknown[]): Promise<void>;
   pull(scope: "favorites" | "workflows" | "presets" | "preferences"): Promise<unknown[]>;
+}
+
+export interface PinnedToolsRepository {
+  list(): Promise<PinnedTool[]>;
+  pin(toolId: string): Promise<PinnedTool[]>;
+  unpin(toolId: string): Promise<PinnedTool[]>;
+  reorder(toolIds: string[]): Promise<PinnedTool[]>;
+  subscribe(listener: (pinned: PinnedTool[]) => void): Unsubscribe;
+}
+
+export interface CollectionsRepository {
+  list(): Promise<Collection[]>;
+  create(input: { name: string; description?: string }): Promise<Collection>;
+  update(id: string, patch: { name?: string; description?: string }): Promise<Collection>;
+  remove(id: string): Promise<void>;
+  items(collectionId: string): Promise<CollectionItem[]>;
+  addItem(collectionId: string, kind: Favorite["kind"], targetId: string): Promise<CollectionItem[]>;
+  removeItem(collectionId: string, targetId: string): Promise<CollectionItem[]>;
+  subscribe(listener: (collections: Collection[]) => void): Unsubscribe;
 }

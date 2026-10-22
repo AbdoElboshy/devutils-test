@@ -207,3 +207,24 @@ export type Subscription = {
   status: SubscriptionStatus;
   currentPeriodEnd: string | null;
 };
+
+export type PinnedTool = {
+  toolId: EntityId;
+  sortOrder: number;
+  createdAt: string;
+};
+
+export type Collection = {
+  id: EntityId;
+  name: string;
+  description: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CollectionItem = {
+  kind: FavoriteKind;
+  targetId: EntityId;
+  sortOrder: number;
+  addedAt: string;
+};
