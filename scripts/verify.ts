@@ -1,5 +1,6 @@
 // DevUtils verification — critical functionality per spec §43 + acceptance scenarios.
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import {
   formatJson, minifyJson, sortJson, flattenJson, unflattenJson, queryJsonPath, queryJsonPointer, applyJsonPatch, applyJsonMergePatch,
   jsonToYaml, yamlToJson, jsonToCsv, csvToJson, jsonToToml, tomlToJson, jsonToSchema, formatSql, minifySql, explainRegex, jsonToXml, formatXml,
@@ -431,5 +432,16 @@ eq("AWS search", searchTools("aws arn", 20).some((hit) => hit.tool.id === "aws-a
   eq("suggest: pure gibberish returns none", suggestFallback("zzzzqqq").length, 0);
 }
 
+
+// --- P4: accessibility attributes (static source checks) ---
+{
+  const chromeSrc = readFileSync("src/components/chrome.tsx", "utf8");
+  const uiSrc = readFileSync("src/components/ui.tsx", "utf8");
+  eq("a11y: palette combobox + active descendant", chromeSrc.includes('role="combobox"') && chromeSrc.includes("aria-activedescendant"), true);
+  eq("a11y: account menu declares popup menu", chromeSrc.includes('aria-haspopup="menu"'), true);
+  eq("a11y: palette dialog semantics", chromeSrc.includes('role="dialog"') && chromeSrc.includes('aria-modal="true"'), true);
+  eq("a11y: shared switch/tablist/aria-pressed", uiSrc.includes('role="switch"') && uiSrc.includes('role="tablist"') && uiSrc.includes("aria-pressed"), true);
+  eq("a11y: tabs roving tabIndex", uiSrc.includes("tabIndex={active === t.id ? 0 : -1}"), true);
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
