@@ -1,5 +1,5 @@
-import type { AuthProvider, FavoritesRepository, PresetRepository, RecentToolsRepository, Unsubscribe, WorkflowRepository } from "./contracts";
-import type { Favorite, RecentTool, SavedPreset, SavedWorkflow, User } from "./models";
+import type { AuthProvider, CollectionsRepository, FavoritesRepository, PinnedToolsRepository, PresetRepository, RecentToolsRepository, Unsubscribe, WorkflowRepository } from "./contracts";
+import type { Collection, CollectionItem, Favorite, PinnedTool, RecentTool, SavedPreset, SavedWorkflow, User } from "./models";
 
 type SubscribableRepository<T> = { subscribe(listener: (items: T[]) => void): Unsubscribe };
 type ScopedFavoritesRepository = FavoritesRepository & { setUserScope?: (userId: string | null) => void };
@@ -82,4 +82,25 @@ export class AdaptivePresetRepository extends AdaptiveBase<SavedPreset> implemen
   async list(toolId?: string): Promise<SavedPreset[]> { return this.authenticated && this.cloud ? this.cloud.list(toolId) : this.local.list(toolId); }
   async save(value: SavedPreset): Promise<SavedPreset> { return this.authenticated && this.cloud ? this.cloud.save(value) : this.local.save(value); }
   async remove(id: string): Promise<void> { return this.authenticated && this.cloud ? this.cloud.remove(id) : this.local.remove(id); }
+}
+
+export class AdaptivePinnedToolsRepository extends AdaptiveBase<PinnedTool> implements PinnedToolsRepository {
+  declare protected local: PinnedToolsRepository;
+  declare protected cloud: PinnedToolsRepository | null;
+  async list(): Promise<PinnedTool[]> { return this.authenticated && this.cloud ? this.cloud.list() : this.local.list(); }
+  async pin(toolId: string): Promise<PinnedTool[]> { return this.authenticated && this.cloud ? this.cloud.pin(toolId) : this.local.pin(toolId); }
+  async unpin(toolId: string): Promise<PinnedTool[]> { return this.authenticated && this.cloud ? this.cloud.unpin(toolId) : this.local.unpin(toolId); }
+  async reorder(toolIds: string[]): Promise<PinnedTool[]> { return this.authenticated && this.cloud ? this.cloud.reorder(toolIds) : this.local.reorder(toolIds); }
+}
+
+export class AdaptiveCollectionsRepository extends AdaptiveBase<Collection> implements CollectionsRepository {
+  declare protected local: CollectionsRepository;
+  declare protected cloud: CollectionsRepository | null;
+  async list(): Promise<Collection[]> { return this.authenticated && this.cloud ? this.cloud.list() : this.local.list(); }
+  async create(input: { name: string; description?: string }): Promise<Collection> { return this.authenticated && this.cloud ? this.cloud.create(input) : this.local.create(input); }
+  async update(id: string, patch: { name?: string; description?: string }): Promise<Collection> { return this.authenticated && this.cloud ? this.cloud.update(id, patch) : this.local.update(id, patch); }
+  async remove(id: string): Promise<void> { return this.authenticated && this.cloud ? this.cloud.remove(id) : this.local.remove(id); }
+  async items(collectionId: string): Promise<CollectionItem[]> { return this.authenticated && this.cloud ? this.cloud.items(collectionId) : this.local.items(collectionId); }
+  async addItem(collectionId: string, kind: Favorite["kind"], targetId: string): Promise<CollectionItem[]> { return this.authenticated && this.cloud ? this.cloud.addItem(collectionId, kind, targetId) : this.local.addItem(collectionId, kind, targetId); }
+  async removeItem(collectionId: string, targetId: string): Promise<CollectionItem[]> { return this.authenticated && this.cloud ? this.cloud.removeItem(collectionId, targetId) : this.local.removeItem(collectionId, targetId); }
 }
