@@ -294,7 +294,9 @@ ok("hasMinRole moderator below admin (phase6)", () => assert.equal(hasMinRole("m
 ok("hasMinRole admin meets admin (phase6)", () => assert.equal(hasMinRole("admin", "admin"), true));
 ok("hasMinRole super_admin meets admin (phase6)", () => assert.equal(hasMinRole("super_admin", "admin"), true));
 ok("hasMinRole admin below super_admin (phase6)", () => assert.equal(hasMinRole("admin", "super_admin"), false));
-ok("hasMinRole unknown role never passes (phase6)", () => assert.equal(hasMinRole("owner", "moderator"), false));\n\n/* ---------------- phase6: admin route gating matrix ---------------- */
+ok("hasMinRole unknown role never passes (phase6)", () => assert.equal(hasMinRole("owner", "moderator"), false));
+
+/* ---------------- phase6: admin route gating matrix ---------------- */
 /* Every /api/admin route and its minimum tier, pinned via hasMinRole so a
    future edit cannot silently widen a gate. Server middleware (requireRole)
    is the enforcement; this matrix is its characterization test. */
