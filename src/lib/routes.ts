@@ -11,7 +11,7 @@ export type AdminSection = (typeof ADMIN_SECTIONS)[number];
 
 export const ACCOUNT_SECTIONS: AccountSection[] = [
   "dashboard", "profile", "favorites", "workflows", "presets",
-  "api-keys", "usage", "billing", "security", "settings",
+  "api-keys", "usage", "billing", "security", "settings", "collections",
 ];
 
 const AUTH_ROUTES: Record<string, "login" | "signup" | "forgot" | "reset" | "verify"> = {

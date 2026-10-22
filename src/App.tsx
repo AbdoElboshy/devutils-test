@@ -6,10 +6,10 @@ import {
   KeyRound, GitBranch, Workflow, FileKey, CalendarClock as CronIcon, Hash, SquareTerminal,
   Plug, Gauge, Globe2, FileDigit, ArrowLeftRight, KeySquare, Fingerprint, ShieldAlert,
   Award, QrCode, Repeat, TableProperties, Braces as BracesIcon, ALargeSmall, Timer,
-  Earth, CalendarDays, Siren, LayoutGrid, Activity, BarChart3, Cloud,
+  Earth, CalendarDays, Siren, LayoutGrid, Activity, BarChart3, Cloud, Pin,
 } from "lucide-react";
 import { Header, Footer, CommandPalette } from "./components/chrome";
-import { useEntityFavorite, useFavorites, useRecents, Panel } from "./components/ui";
+import { useEntityFavorite, useFavorites, usePinned, useRecents, Panel } from "./components/ui";
 import { TOOLS, CATEGORIES, TOOL_MAP, ROUTE_MAP, getCategory, getToolsByCategory, getRelated, getRegistryVersion, loadRegistryOverlays, subscribeRegistry, type Tool } from "./lib/registry";
 import { AdminPage } from "./pages/admin";
 import { cn } from "./utils/cn";
@@ -298,6 +298,7 @@ function ToolView({ id }: { id: string }) {
 export function ToolCard({ tool, onNav }: { tool: Tool; onNav: (p: string) => void }) {
   const Icon = TOOL_ICONS[tool.id] ?? Braces;
   const { has, toggle } = useFavorites();
+  const { has: hasPin, toggle: togglePin } = usePinned();
   return (
     <div className="group relative flex flex-col rounded-xl border border-zinc-200 bg-white p-4 transition hover:border-emerald-500/60 hover:shadow-[0_4px_16px_rgba(0,0,0,0.06)] dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-emerald-600/60">
       <div className="flex items-start gap-3">
@@ -314,6 +315,10 @@ export function ToolCard({ tool, onNav }: { tool: Tool; onNav: (p: string) => vo
           className={cn("rounded-md p-1", has(tool.id) ? "text-amber-400" : "text-zinc-300 opacity-0 hover:text-zinc-500 group-hover:opacity-100 dark:text-zinc-600")}>
           <Star size={15} fill={has(tool.id) ? "currentColor" : "none"} />
         </button>
+        <button type="button" onClick={() => togglePin(tool.id)} aria-label="Pin tool" aria-pressed={hasPin(tool.id)}
+          className={cn("rounded-md p-1", hasPin(tool.id) ? "text-emerald-500" : "text-zinc-300 opacity-0 hover:text-zinc-500 group-hover:opacity-100 dark:text-zinc-600")}>
+          <Pin size={15} fill={hasPin(tool.id) ? "currentColor" : "none"} />
+        </button>
       </div>
       <div className="mt-2.5 flex flex-wrap gap-1">
         {tool.capabilities.slice(0, 4).map((c) => (
@@ -329,9 +334,11 @@ export function ToolCard({ tool, onNav }: { tool: Tool; onNav: (p: string) => vo
 function Home({ onNav, onSearch }: { onNav: (p: string) => void; onSearch: () => void }) {
   const { favs } = useFavorites();
   const { recents } = useRecents();
+  const { pinned } = usePinned();
   const popular = useMemo(() => TOOLS.filter((t) => t.featured), []);
   const recentTools = recents.map((id) => TOOL_MAP[id]).filter(Boolean).slice(0, 4);
   const favTools = favs.map((id) => TOOL_MAP[id]).filter(Boolean).slice(0, 4);
+  const pinnedTools = pinned.map((id) => TOOL_MAP[id]).filter(Boolean).slice(0, 6);
 
   return (
     <div>
@@ -368,22 +375,48 @@ function Home({ onNav, onSearch }: { onNav: (p: string) => void; onSearch: () =>
       </section>
 
       <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
-        {(recentTools.length > 0 || favTools.length > 0) && (
+        {(recentTools.length > 0 || favTools.length > 0 || pinnedTools.length > 0) && (
           <section className="pt-8">
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {pinnedTools.length > 0 && (
+                <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition hover:border-emerald-500/50 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-emerald-600/50">
+                  <div className="flex items-center gap-2.5">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-600/10 text-emerald-600 dark:text-emerald-400"><Pin size={15} /></span>
+                    <div>
+                      <p className="text-[13.5px] font-bold">Pinned</p>
+                      <p className="text-[11px] text-zinc-400">{pinnedTools.length} {pinnedTools.length === 1 ? "tool" : "tools"} · quick access</p>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {pinnedTools.map((t) => <ToolChip key={t.id} tool={t} onNav={onNav} />)}
+                  </div>
+                </div>
+              )}
               {recentTools.length > 0 && (
-                <div>
-                  <h2 className="flex items-center gap-1.5 text-[13px] font-bold uppercase tracking-wide text-zinc-500"><Clock size={13} /> Recent</h2>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {recentTools.map((t) => <Chip key={t.id} label={t.name} onClick={() => onNav(t.route)} />)}
+                <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition hover:border-sky-500/50 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-sky-600/50">
+                  <div className="flex items-center gap-2.5">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky-500/10 text-sky-600 dark:text-sky-400"><Clock size={15} /></span>
+                    <div>
+                      <p className="text-[13.5px] font-bold">Recent</p>
+                      <p className="text-[11px] text-zinc-400">{recentTools.length} {recentTools.length === 1 ? "tool" : "tools"} · pick up where you left off</p>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {recentTools.map((t) => <ToolChip key={t.id} tool={t} onNav={onNav} />)}
                   </div>
                 </div>
               )}
               {favTools.length > 0 && (
-                <div>
-                  <h2 className="flex items-center gap-1.5 text-[13px] font-bold uppercase tracking-wide text-zinc-500"><Star size={13} /> Favorites</h2>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {favTools.map((t) => <Chip key={t.id} label={t.name} onClick={() => onNav(t.route)} />)}
+                <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition hover:border-amber-500/50 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-amber-600/50">
+                  <div className="flex items-center gap-2.5">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/10 text-amber-500 dark:text-amber-400"><Star size={15} /></span>
+                    <div>
+                      <p className="text-[13.5px] font-bold">Favorites</p>
+                      <p className="text-[11px] text-zinc-400">{favTools.length} {favTools.length === 1 ? "tool" : "tools"} · starred by you</p>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {favTools.map((t) => <ToolChip key={t.id} tool={t} onNav={onNav} />)}
                   </div>
                 </div>
               )}
@@ -488,6 +521,19 @@ function Chip({ label, onClick }: { label: string; onClick: () => void }) {
   return (
     <button type="button" onClick={onClick} className="rounded-full border border-zinc-200 bg-white px-3 py-1 text-[12.5px] font-medium text-zinc-600 transition hover:border-emerald-500 hover:text-emerald-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
       {label}
+    </button>
+  );
+}
+
+function ToolChip({ tool, onNav }: { tool: Tool; onNav: (p: string) => void }) {
+  const Icon = TOOL_ICONS[tool.id] ?? Braces;
+  return (
+    <button type="button" onClick={() => onNav(tool.route)}
+      className="group inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white py-1 pl-1 pr-2.5 text-[12.5px] font-medium text-zinc-600 transition hover:-translate-y-0.5 hover:border-emerald-500 hover:text-emerald-700 hover:shadow-[0_2px_8px_rgba(16,185,129,0.15)] active:translate-y-0 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-emerald-600/60 dark:hover:text-emerald-300">
+      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-zinc-100 text-zinc-500 transition group-hover:bg-emerald-600/15 group-hover:text-emerald-600 dark:bg-zinc-800 dark:text-zinc-400 dark:group-hover:bg-emerald-600/20 dark:group-hover:text-emerald-400">
+        <Icon size={11} />
+      </span>
+      <span className="max-w-[140px] truncate">{tool.name}</span>
     </button>
   );
 }

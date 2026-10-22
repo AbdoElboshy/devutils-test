@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { AlertTriangle, Bookmark, Gauge, KeyRound, LogOut, Settings, Shield, Star, Trash2, UserRound, Workflow as WorkflowIcon } from "lucide-react";
-import { platform, type ApiKeyMetadata, type AuditLog, type Favorite, type Profile, type SavedPreset, type SavedWorkflow, type UsageSummary, type User } from "../platform";
+import { AlertTriangle, Bookmark, Download, FolderOpen, Gauge, KeyRound, LogOut, Pin, Settings, Shield, Star, Trash2, Upload, UserRound, Workflow as WorkflowIcon } from "lucide-react";
+import { platform, type ApiKeyMetadata, type AuditLog, type Collection, type CollectionItem, type Favorite, type PinnedTool, type Profile, type SavedPreset, type SavedWorkflow, type UsageSummary, type User } from "../platform";
 import { useAuth } from "../platform/auth-context";
-import { TOOL_MAP } from "../lib/registry";
+import { TOOL_MAP, type Tool } from "../lib/registry";
 import { WORKFLOW_TEMPLATES } from "../data/workflows";
 import { INTEGRATIONS } from "../data/integrations";
 import { Btn, Check, ErrorCallout, Field, Panel, Select, Stat, TextInput } from "../components/ui";
@@ -10,12 +10,12 @@ import { AccountUnavailable } from "./auth";
 import { cn } from "../utils/cn";
 import { getPrivacyPreferences, setPrivacyPreferences } from "../platform/privacy";
 
-export type AccountSection = "dashboard" | "profile" | "favorites" | "workflows" | "presets" | "api-keys" | "usage" | "billing" | "security" | "settings";
+export type AccountSection = "dashboard" | "profile" | "favorites" | "workflows" | "presets" | "api-keys" | "usage" | "billing" | "security" | "settings" | "collections";
 
 const sections: { id: AccountSection; label: string; icon: typeof Gauge }[] = [
   { id: "dashboard", label: "Dashboard", icon: Gauge }, { id: "profile", label: "Profile", icon: UserRound },
   { id: "favorites", label: "Favorites", icon: Star }, { id: "workflows", label: "Workflows", icon: WorkflowIcon },
-  { id: "presets", label: "Presets", icon: Bookmark }, { id: "security", label: "Security", icon: Shield }, { id: "settings", label: "Settings", icon: Settings },
+  { id: "presets", label: "Presets", icon: Bookmark }, { id: "collections", label: "Collections", icon: FolderOpen }, { id: "settings", label: "Settings", icon: Settings },
 ];
 
 const emptyUsage = (): UsageSummary => ({ toolRuns: 0, workflowRuns: 0, apiRequests: 0, integrationCalls: 0, periodStart: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString() });
@@ -30,6 +30,8 @@ export function AccountPage({ section, onNav }: { section: AccountSection; onNav
   const [audit, setAudit] = useState<AuditLog[]>([]);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [keys, setKeys] = useState<ApiKeyMetadata[]>([]);
+  const [pinned, setPinned] = useState<PinnedTool[]>([]);
+  const [collections, setCollections] = useState<Collection[]>([]);
   const [loadingData, setLoadingData] = useState(true);
   const [error, setError] = useState("");
 
@@ -38,16 +40,17 @@ export function AccountPage({ section, onNav }: { section: AccountSection; onNav
     if (!user) return;
     setLoadingData(true); setError("");
     try {
-      const [favoriteData, workflowData, presetData, recentData, profileData, usageData, auditData, keyData] = await Promise.all([
+      const [favoriteData, workflowData, presetData, recentData, profileData, usageData, auditData, keyData, pinnedData, collectionsData] = await Promise.all([
         platform.favorites.list(), platform.workflows.list(), platform.presets.list(), platform.recentTools.list(),
         platform.profile?.get() ?? null,
         platform.usage?.summary() ?? emptyUsage(),
         platform.audit?.list() ?? [],
         platform.apiKeys?.list() ?? [],
+        platform.pinned.list(), platform.collections.list(),
       ]);
       setFavorites(favoriteData); setWorkflows(workflowData); setPresets(presetData); setRecent(recentData.map((item) => item.toolId));
       setProfile(profileData ?? { userId: user.id, displayName: user.displayName ?? "", avatarUrl: user.avatarUrl ?? "", timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, locale: navigator.language, theme: "system", preferences: {} });
-      setUsage(usageData); setAudit(auditData); setKeys(keyData);
+      setUsage(usageData); setAudit(auditData); setKeys(keyData); setPinned(pinnedData); setCollections(collectionsData);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not load account data."); }
     finally { setLoadingData(false); }
   // Depend on the stable identity, not the user object instance. Auth refreshes
@@ -77,16 +80,16 @@ export function AccountPage({ section, onNav }: { section: AccountSection; onNav
           {!auth.user.emailVerified && <UnverifiedBanner email={auth.user.email ?? ""} />}
           {loadingData ? <Panel className="p-6 text-sm text-zinc-500">Loading account data…</Panel> : (
             <>
-              {section === "dashboard" && <><DashboardSection name={profile?.displayName || auth.user.displayName || auth.user.email || "developer"} favorites={favorites} workflows={workflows} presets={presets} recent={recent} usage={usage} audit={audit} onNav={onNav} /><DashboardCharts favorites={favorites} usage={usage} onNav={onNav} /></>}
+              {section === "dashboard" && <><DashboardSection name={profile?.displayName || auth.user.displayName || auth.user.email || "developer"} favorites={favorites} workflows={workflows} presets={presets} recent={recent} pinned={pinned} usage={usage} audit={audit} onNav={onNav} onReload={load} /><DashboardCharts favorites={favorites} usage={usage} onNav={onNav} /></>}
               {section === "profile" && profile && <ProfileSection value={profile} email={auth.user.email ?? ""} emailVerified={auth.user.emailVerified} onSaved={load} />}
               {section === "favorites" && <FavoritesSection favorites={favorites} onNav={onNav} onChanged={load} />}
               {section === "workflows" && <WorkflowsSection workflows={workflows} onNav={onNav} onChanged={load} />}
               {section === "presets" && <PresetsSection presets={presets} onChanged={load} />}
+              {section === "collections" && <CollectionsSection collections={collections} onReload={load} />}
               {section === "api-keys" && <ApiKeysSection userId={auth.user.id} keys={keys} onChanged={load} />}
               {section === "usage" && <UsageSection usage={usage} user={auth.user} />}
               {section === "billing" && <BillingSection plan={auth.user.planId} />}
-              {section === "security" && <SettingsSection profile={profile} onNav={onNav} />}
-              {section === "settings" && <SettingsSection profile={profile} onNav={onNav} />}
+              {(section === "security" || section === "settings") && <SettingsSection profile={profile} onNav={onNav} />}
             </>
           )}
         </div>
@@ -99,14 +102,150 @@ function ProtectedAccountEmpty({ onNav }: { onNav: (route: string) => void }) {
   return <div className="mx-auto w-full max-w-lg px-4 py-20 text-center"><Shield size={28} className="mx-auto text-zinc-400" /><h1 className="mt-3 text-2xl font-extrabold">Sign in required</h1><p className="mt-2 text-sm text-zinc-500">This route contains private account data. Public tools remain available without signing in.</p><div className="mt-5 flex justify-center gap-2"><Btn variant="primary" onClick={() => onNav("/login")}>Sign in</Btn><Btn onClick={() => onNav("/tools")}>Public tools</Btn></div></div>;
 }
 
-function DashboardSection({ name, favorites, workflows, presets, recent, usage, audit, onNav }: { name: string; favorites: Favorite[]; workflows: SavedWorkflow[]; presets: SavedPreset[]; recent: string[]; usage: UsageSummary; audit: AuditLog[]; onNav: (route: string) => void }) {
+function DashboardSection({ name, favorites, workflows, presets, recent, pinned, usage, audit, onNav, onReload }: { name: string; favorites: Favorite[]; workflows: SavedWorkflow[]; presets: SavedPreset[]; recent: string[]; pinned: PinnedTool[]; usage: UsageSummary; audit: AuditLog[]; onNav: (route: string) => void; onReload: () => Promise<void> }) {
   return <div><h2 className="text-xl font-extrabold">Welcome back, {name}</h2><p className="mt-1 text-[13px] text-zinc-500">Real account activity for the current month. No tool inputs are tracked.</p>
     <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4"><Stat label="Favorites" value={String(favorites.length)} /><Stat label="Workflows" value={String(workflows.length)} /><Stat label="Presets" value={String(presets.length)} /><Stat label="API requests" value={usage.apiRequests.toLocaleString()} /></div>
+    <PinnedToolsPanel pinned={pinned} onNav={onNav} onReload={onReload} />
     <div className="mt-5 grid gap-4 md:grid-cols-2">
       <AccountBlock title="Recent tools" empty="Use a tool and it will appear here. No pasted content is saved.">{recent.map((id) => TOOL_MAP[id]).filter(Boolean).slice(0, 7).map((tool) => <button key={tool.id} type="button" onClick={() => onNav(tool.route)} className="flex w-full items-center justify-between border-b border-zinc-100 py-2 text-left text-[13px] font-medium last:border-0 dark:border-zinc-800"><span>{tool.name}</span><span className="text-zinc-400">Open →</span></button>)}</AccountBlock>
       <AccountBlock title="Account activity" empty="No account changes have been recorded yet.">{audit.map((item) => <div key={item.id} className="flex items-center justify-between gap-2 border-b border-zinc-100 py-2 text-[12.5px] last:border-0 dark:border-zinc-800"><span className="capitalize">{item.action.replace(/_/g, " ")}</span><time className="font-mono text-[10.5px] text-zinc-400">{new Date(item.createdAt).toLocaleString()}</time></div>)}</AccountBlock>
     </div>
     {platform.merge && <LocalMergePanel />}
+  </div>;
+}
+
+function PinnedToolsPanel({ pinned, onNav, onReload }: { pinned: PinnedTool[]; onNav: (route: string) => void; onReload: () => Promise<void> }) {
+  const [toolId, setToolId] = useState("");
+  const [message, setMessage] = useState("");
+  const entries: Array<{ tool: Tool; sortOrder: number }> = [];
+  pinned.forEach((item) => { const tool = TOOL_MAP[item.toolId]; if (tool) entries.push({ tool, sortOrder: item.sortOrder }); });
+  entries.sort((a, b) => a.sortOrder - b.sortOrder);
+  const ids = entries.map((entry) => entry.tool.id);
+  const move = async (index: number, delta: number) => {
+    const target = index + delta;
+    if (target < 0 || target >= ids.length) return;
+    const next = ids.slice();
+    [next[index], next[target]] = [next[target], next[index]];
+    await platform.pinned.reorder(next);
+    await onReload();
+  };
+  const pin = async () => {
+    if (!toolId) { setMessage("Choose a tool to pin."); return; }
+    try { await platform.pinned.pin(toolId); setToolId(""); setMessage(""); await onReload(); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "Could not pin the tool."); }
+  };
+  const unpin = async (id: string) => {
+    try { await platform.pinned.unpin(id); await onReload(); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "Could not unpin the tool."); }
+  };
+  return (
+    <Panel className="p-4">
+      <h3 className="text-[13px] font-bold">Pinned tools</h3>
+      <div className="mt-2">
+        {entries.length === 0 && <p className="rounded-lg border border-dashed border-zinc-300 p-4 text-center text-[12.5px] text-zinc-500 dark:border-zinc-700">No pinned tools yet. Pin your most-used tools below to keep them one click away.</p>}
+        {entries.map((entry, index) => (
+          <div key={entry.tool.id} className="flex items-center justify-between gap-2 border-b border-zinc-100 py-2 text-[13px] font-medium last:border-0 dark:border-zinc-800">
+            <button type="button" onClick={() => onNav(entry.tool.route)} className="text-left hover:text-emerald-700 dark:hover:text-emerald-300">{entry.tool.name}</button>
+            <span className="flex items-center gap-1">
+              <button type="button" aria-label={"Move " + entry.tool.name + " up"} disabled={index === 0} onClick={() => { void move(index, -1); }} className="rounded-md px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-900">&uarr;</button>
+              <button type="button" aria-label={"Move " + entry.tool.name + " down"} disabled={index === entries.length - 1} onClick={() => { void move(index, 1); }} className="rounded-md px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-900">&darr;</button>
+              <button type="button" aria-label={"Unpin " + entry.tool.name} onClick={() => { void unpin(entry.tool.id); }} className="rounded-md px-1.5 py-0.5 text-zinc-400 hover:text-red-600">&#10005;</button>
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-3 dark:border-zinc-800">
+        <Select value={toolId} onChange={(event) => setToolId(event.target.value)}>
+          <option value="">Choose a tool&hellip;</option>
+          {Object.values(TOOL_MAP).map((tool) => <option key={tool.id} value={tool.id}>{tool.name}</option>)}
+        </Select>
+        <Btn onClick={() => { void pin(); }} disabled={!toolId}><Pin size={13} /> Pin tool</Btn>
+      </div>
+      {message && <p className="mt-2 text-[12px] text-red-600">{message}</p>}
+    </Panel>
+  );
+}
+
+function CollectionsSection({ collections, onReload }: { collections: Collection[]; onReload: () => Promise<void> }) {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [message, setMessage] = useState("");
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [items, setItems] = useState<CollectionItem[]>([]);
+  const [toolId, setToolId] = useState("");
+
+useEffect(() => {
+    if (openId) { void platform.collections.items(openId).then(setItems).catch(() => setItems([])); }
+    else setItems([]);
+  }, [openId]);
+
+const create = async () => {
+    if (!name.trim()) { setMessage("Collection name is required."); return; }
+    try { await platform.collections.create({ name: name.trim(), description: description.trim() }); setName(""); setDescription(""); setMessage("Collection created."); await onReload(); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "Could not create the collection."); }
+  };
+  const remove = async (id: string) => {
+    if (!window.confirm("Delete this collection and its items?")) return;
+    try { await platform.collections.remove(id); if (openId === id) setOpenId(null); setMessage("Collection deleted."); await onReload(); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "Could not delete the collection."); }
+  };
+  const addItem = async () => {
+    if (!openId || !toolId) { setMessage("Pick a tool to add."); return; }
+    try { await platform.collections.addItem(openId, "tool", toolId); setItems(await platform.collections.items(openId)); setMessage("Tool added."); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "Could not add the tool."); }
+  };
+  const removeItem = async (targetId: string) => {
+    if (!openId) return;
+    try { await platform.collections.removeItem(openId, targetId); setItems(await platform.collections.items(openId)); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "Could not remove the item."); }
+  };
+
+return <div className="space-y-4">
+    <Panel className="p-5"><h2 className="text-[14px] font-extrabold">New collection</h2>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <TextInput value={name} onChange={(event) => setName(event.target.value)} placeholder="Collection name (required, unique)" />
+        <TextInput value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Description (optional)" />
+      </div>
+      <Btn className="mt-2" onClick={() => { void create(); }}>Create collection</Btn>
+      {message && <p className="mt-3 text-[12.5px] text-emerald-600">{message}</p>}
+    </Panel>
+    {collections.length === 0 && <Panel className="p-6 text-center text-[13px] text-zinc-500">No collections yet. Group your favorite tools into named collections above.</Panel>}
+    {collections.map((collection) => (
+      <Panel key={collection.id} className="p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="min-w-0">
+            <button type="button" onClick={() => setOpenId(openId === collection.id ? null : collection.id)} className="text-left text-[14px] font-bold hover:text-emerald-700 dark:hover:text-emerald-300">{collection.name}</button>
+            {collection.description && <p className="mt-0.5 text-[12.5px] text-zinc-500">{collection.description}</p>}
+            <p className="mt-0.5 text-[11px] text-zinc-400">Updated {new Date(collection.updatedAt).toLocaleDateString()}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Btn variant="ghost" onClick={() => setOpenId(openId === collection.id ? null : collection.id)}>{openId === collection.id ? "Hide items" : "Show items"}</Btn>
+            <Btn variant="danger" onClick={() => { void remove(collection.id); }}><Trash2 size={13} /> Delete</Btn>
+          </div>
+        </div>
+        {openId === collection.id && (
+          <div className="mt-3 border-t border-zinc-200 pt-3 dark:border-zinc-800">
+            <div className="space-y-1">
+              {items.length === 0 && <p className="text-[12.5px] text-zinc-500">No items yet.</p>}
+              {items.map((item) => {
+                const tool = TOOL_MAP[item.targetId];
+                return <div key={item.targetId} className="flex items-center justify-between gap-2 text-[13px]">
+                  <span className="font-medium">{tool ? tool.name : item.targetId}<span className="ml-2 rounded bg-zinc-100 px-1.5 py-0.5 text-[10.5px] uppercase text-zinc-400 dark:bg-zinc-800">{item.kind}</span></span>
+                  <button type="button" onClick={() => { void removeItem(item.targetId); }} className="text-zinc-400 hover:text-red-600">Remove</button>
+                </div>;
+              })}
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Select value={toolId} onChange={(event) => setToolId(event.target.value)}>
+                <option value="">Add a tool&hellip;</option>
+                {Object.values(TOOL_MAP).map((tool) => <option key={tool.id} value={tool.id}>{tool.name}</option>)}
+              </Select>
+              <Btn onClick={() => { void addItem(); }} disabled={!toolId}>Add to collection</Btn>
+            </div>
+          </div>
+        )}
+      </Panel>
+    ))}
   </div>;
 }
 
@@ -203,6 +342,83 @@ function SettingsSection({ profile, onNav }: { profile: Profile | null; onNav: (
     } catch (error) { setMessage(error instanceof Error ? error.message : "Password update failed."); }
     finally { setBusy(false); }
   };
+  const [portMessage, setPortMessage] = useState("");
+  const exportData = async () => {
+    setPortMessage("");
+    try {
+      const [favoriteRows, workflowRows, presetRows, pinnedRows, collectionRows] = await Promise.all([
+        platform.favorites.list(), platform.workflows.list(), platform.presets.list(), platform.pinned.list(), platform.collections.list(),
+      ]);
+      const collectionsWithItems = await Promise.all(collectionRows.map(async (collection) => ({ ...collection, items: await platform.collections.items(collection.id) })));
+      const payload = { format: "devutils-export", version: 1, exportedAt: new Date().toISOString(), favorites: favoriteRows, workflows: workflowRows, presets: presetRows, pinned: pinnedRows, collections: collectionsWithItems };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "devutils-export.json";
+      link.click();
+      URL.revokeObjectURL(url);
+      setPortMessage("Export downloaded as devutils-export.json.");
+    } catch (error) { setPortMessage(error instanceof Error ? error.message : "Export failed."); }
+  };
+  const importData = async (file: File | null) => {
+    if (!file) return;
+    setPortMessage("");
+    try {
+      const raw = JSON.parse(await file.text()) as {
+        favorites?: Array<{ kind?: unknown; targetId?: unknown }>;
+        workflows?: Array<Record<string, unknown>>;
+        presets?: Array<Record<string, unknown>>;
+        pinned?: Array<{ toolId?: unknown }>;
+        collections?: Array<Record<string, unknown>>;
+      };
+      let imported = 0;
+      const existingFavorites = await platform.favorites.list();
+      const knownFavorites = new Set(existingFavorites.map((item) => item.kind + ":" + item.targetId));
+      for (const favorite of raw.favorites ?? []) {
+        if (typeof favorite.kind !== "string" || typeof favorite.targetId !== "string") continue;
+        if (!["tool", "toolkit", "workflow", "integration"].includes(favorite.kind)) continue;
+        if (knownFavorites.has(favorite.kind + ":" + favorite.targetId)) continue;
+        await platform.favorites.toggle(favorite.kind as Favorite["kind"], favorite.targetId);
+        imported += 1;
+      }
+      for (const workflow of raw.workflows ?? []) {
+        if (typeof workflow.id !== "string" || !Array.isArray(workflow.steps)) continue;
+        await platform.workflows.save(workflow as unknown as SavedWorkflow);
+        imported += 1;
+      }
+      for (const preset of raw.presets ?? []) {
+        if (typeof preset.id !== "string" || typeof preset.toolId !== "string" || typeof preset.config !== "object" || !preset.config) continue;
+        await platform.presets.save(preset as unknown as SavedPreset);
+        imported += 1;
+      }
+      for (const item of raw.pinned ?? []) {
+        if (typeof item.toolId !== "string") continue;
+        await platform.pinned.pin(item.toolId);
+        imported += 1;
+      }
+      for (const collection of raw.collections ?? []) {
+        if (typeof collection.name !== "string" || !collection.name) continue;
+        try {
+          const created = await platform.collections.create({ name: String(collection.name).slice(0, 60), description: typeof collection.description === "string" ? collection.description.slice(0, 200) : undefined });
+          const entries = Array.isArray(collection.items) ? collection.items : [];
+          for (const entry of entries) {
+            if (typeof entry !== "object" || entry === null) continue;
+            const kind = (entry as { kind?: unknown }).kind;
+            const targetId = (entry as { targetId?: unknown }).targetId;
+            if (typeof kind !== "string" || typeof targetId !== "string") continue;
+            if (!["tool", "toolkit", "workflow", "integration"].includes(kind)) continue;
+            await platform.collections.addItem(created.id, kind as Favorite["kind"], targetId);
+          }
+          imported += 1;
+        } catch { /* duplicate or invalid collection: skip and keep going */ }
+      }
+      setPortMessage("Imported " + imported + " records.");
+    } catch (error) {
+      setPortMessage(error instanceof Error ? error.message : "Import failed. The file must be a DevUtils export.");
+    }
+  };
+
   const savePreferences = async () => {
     setPrivacyPreferences(privacy);
     try { localStorage.setItem("du:theme", JSON.stringify(theme)); } catch { /* noop */ }
@@ -219,6 +435,16 @@ function SettingsSection({ profile, onNav }: { profile: Profile | null; onNav: (
       {message && <p className="mt-3 text-[12.5px] text-emerald-600">{message}</p>}
     </Panel>
     <Panel className="p-5"><h2 className="text-[14px] font-extrabold">Privacy</h2><p className="mt-1 text-[13px] leading-relaxed text-zinc-500">Sensitive tool input is never synced. Account storage includes IDs, safe preset configuration, workflow definitions and privacy-safe usage counts only.</p><div className="mt-3 flex flex-wrap gap-2"><Check label="Remember recent tool IDs" checked={privacy.recentHistory} onChange={(value) => setPrivacy({ ...privacy, recentHistory: value })} /><Check label="Allow privacy-safe product analytics if configured" checked={privacy.analytics} onChange={(value) => setPrivacy({ ...privacy, analytics: value })} /></div><p className="mt-2 text-[12px] text-zinc-400">No analytics provider is currently configured. This preference never permits tool inputs to be collected.</p><Btn className="mt-3" onClick={() => { void savePreferences(); }}>Save preferences</Btn><Btn variant="ghost" className="mt-3" onClick={() => { void platform.recentTools.clear().then(() => setMessage("Recent tool IDs cleared.")); }}>Clear recent tool IDs</Btn></Panel>
+        <Panel className="p-5"><h2 className="text-[14px] font-extrabold">Data portability</h2><p className="mt-1 text-[13px] leading-relaxed text-zinc-500">Export your favorites, workflows, presets, pinned tools and collections as JSON, or import a previous export. Tool inputs are never included.</p>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Btn onClick={() => { void exportData(); }}><Download size={13} /> Export data</Btn>
+        <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-200 px-3 py-1.5 text-[13px] font-medium hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900">
+          <Upload size={13} /> Import JSON
+          <input type="file" accept="application/json" className="hidden" onChange={(event) => { void importData(event.target.files ? event.target.files[0] : null); }} />
+        </label>
+      </div>
+      {portMessage && <p className="mt-3 text-[12.5px] text-emerald-600">{portMessage}</p>}
+    </Panel>
     <Panel className="border-red-200 p-5 dark:border-red-900"><h2 className="text-[14px] font-extrabold text-red-700 dark:text-red-300">Delete account</h2><p className="mt-1 text-[12.5px] text-zinc-500">Permanently removes the authentication identity and cascades user-owned profile, favorites, workflows, presets, keys and usage data. This cannot be undone.</p><Field label="Type DELETE to confirm" className="mt-3"><TextInput value={deleteText} onChange={(event) => setDeleteText(event.target.value)} /></Field><Btn variant="danger" className="mt-2" disabled={deleteText !== "DELETE"} onClick={() => { if (deleteText === "DELETE" && window.confirm("Permanently delete your DevUtils account?")) void platform.auth.deleteAccount().then(() => onNav("/")); }}>Delete account permanently</Btn></Panel>
   </div>;
 }

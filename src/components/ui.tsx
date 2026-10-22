@@ -47,6 +47,13 @@ export function useRecents() {
   return { recents, push };
 }
 
+export function usePinned() {
+  const [pinned, setPinned] = useState<string[]>([]);
+  useEffect(() => platform.pinned.subscribe((items) => setPinned(items.map((item) => item.toolId))), []);
+  const toggle = useCallback((id: string) => { void (pinned.includes(id) ? platform.pinned.unpin(id) : platform.pinned.pin(id)); }, [pinned]);
+  return { pinned, toggle, has: (id: string) => pinned.includes(id) };
+}
+
 export function useCopy(timeout = 1600): [boolean, (t: string) => void] {
   const [ok, setOk] = useState(false);
   const timer = useRef<number | null>(null);

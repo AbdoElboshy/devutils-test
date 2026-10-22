@@ -1,6 +1,6 @@
 # DevUtils Project Status
 
-Last updated: 2026-10-20
+Last updated: 2026-10-22
 
 ## Current release status
 - Status: corrected release candidate; not yet validated against live Supabase or deployed to Production.
@@ -49,3 +49,25 @@ Last updated: 2026-10-20
 - Adding executable tool implementations still requires code and a registry build; Admin manages metadata for registered tools.
 - Billing provider/checkout is not configured.
 - This release candidate has not yet been proven identical to Production.
+
+## Phase 5 — accounts and personalization (2026-10-21/22)
+
+- Branch `phase5/accounts`, not yet merged or deployed. Test gateway runs on
+  port 3100 (temporary, started from `/home/ubuntu/test/devutils-test`);
+  production still serves the pre-Phase-5 copy from `/opt/devutils/app`.
+- Features: pinned tools with user-defined ordering (local for anonymous
+  users, cloud when signed in), personal collections with items, account
+  dashboard pinned panel, Home pinned chips, tool-card pin toggle, JSON
+  export/import of personal configuration, Settings consolidation.
+- Database: migrations `202610210001` (new tables) and `202610220001`
+  (grant-restore hotfix after the global REVOKE incident; see CHANGELOG).
+  Both are applied to the shared Supabase project and privileges are verified.
+
+### Required before production (Phase 5)
+1. Complete the live two-user spot-check against port 3100.
+2. Merge `phase5/accounts` into `master` and review the merge diff.
+3. Deploy to `/opt/devutils/app` (it is a copy, not a git clone — plan a
+   scripted rsync/copy or convert it to a tracked clone), run `npm ci` and
+   `npm run build`, then `systemctl restart devutils`.
+4. Stop the temporary 3100 gateway after production deployment is verified.
+5. Re-run the two-user spot-check against production.

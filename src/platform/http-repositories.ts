@@ -1,5 +1,5 @@
-import type { ApiKeyRepository, AuditLogRepository, FavoritesRepository, PresetRepository, ProfileRepository, RecentToolsRepository, Unsubscribe, UsageService, WorkflowRepository } from "./contracts";
-import type { ApiKeyMetadata, AuditLog, Favorite, Profile, RecentTool, SavedPreset, SavedWorkflow, UsageMetric } from "./models";
+import type { ApiKeyRepository, AuditLogRepository, CollectionsRepository, FavoritesRepository, PinnedToolsRepository, PresetRepository, ProfileRepository, RecentToolsRepository, Unsubscribe, UsageService, WorkflowRepository } from "./contracts";
+import type { ApiKeyMetadata, AuditLog, Collection, CollectionItem, Favorite, PinnedTool, Profile, RecentTool, SavedPreset, SavedWorkflow, UsageMetric } from "./models";
 import { apiFetch } from "./http";
 
 type Listener<T> = (items: T[]) => void;
@@ -108,3 +108,90 @@ export class HttpUsageService implements UsageService {
   async summary() { const row = await apiFetch<Record<string, unknown>>("/api/account/usage"); return { toolRuns: Number(row.tool_runs ?? 0), workflowRuns: Number(row.workflow_runs ?? 0), apiRequests: Number(row.api_requests ?? 0), integrationCalls: Number(row.integration_calls ?? 0), periodStart: String(row.period_start ?? new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()) }; }
 }
 export class HttpAuditRepository implements AuditLogRepository { async list() { return (await apiFetch<Record<string, unknown>[]>("/api/account/audit")).map((row) => ({ id: String(row.id), userId: String(row.user_id), action: row.action as AuditLog["action"], metadata: row.metadata as AuditLog["metadata"] ?? {}, createdAt: String(row.created_at) })); } }
+
+export class HttpPinnedToolsRepository implements PinnedToolsRepository {
+  channel = new Channel<PinnedTool>();
+  private cache: PinnedTool[] | null = null;
+  private scopeId: string | null | undefined;
+  private generation = 0;
+
+/** Scope the in-memory cache to one signed-in account (same pattern as favorites). */
+  setUserScope(userId: string | null): void {
+    if (this.scopeId === userId) return;
+    this.scopeId = userId;
+    this.generation += 1;
+    this.cache = null;
+  }
+
+private pinnedRow = (row: Record<string, unknown>): PinnedTool => ({ toolId: String(row.tool_id), sortOrder: Number(row.sort_order) || 0, createdAt: String(row.created_at) });
+
+async list(): Promise<PinnedTool[]> {
+    if (this.cache !== null) return this.cache;
+    const generation = this.generation;
+    const next = (await apiFetch<Record<string, unknown>[]>("/api/account/pinned")).map(this.pinnedRow);
+    if (generation === this.generation) this.cache = next;
+    return next;
+  }
+
+private async fetchFresh(): Promise<PinnedTool[]> {
+    const generation = this.generation;
+    const next = (await apiFetch<Record<string, unknown>[]>("/api/account/pinned")).map(this.pinnedRow);
+    if (generation === this.generation) this.cache = next;
+    return next;
+  }
+
+async pin(toolId: string): Promise<PinnedTool[]> { await apiFetch(`/api/account/pinned/${encodeURIComponent(toolId)}`, { method: "POST" }); const next = await this.fetchFresh(); this.channel.emit(next); return next; }
+  async unpin(toolId: string): Promise<PinnedTool[]> { await apiFetch(`/api/account/pinned/${encodeURIComponent(toolId)}`, { method: "DELETE" }); const next = await this.fetchFresh(); this.channel.emit(next); return next; }
+  async reorder(toolIds: string[]): Promise<PinnedTool[]> { await apiFetch("/api/account/pinned", { method: "PUT", body: JSON.stringify({ toolIds }) }); const next = await this.fetchFresh(); this.channel.emit(next); return next; }
+  subscribe(listener: (pinned: PinnedTool[]) => void): Unsubscribe {
+    const generation = this.generation;
+    const unsubscribe = this.channel.subscribe((items) => { if (generation === this.generation) listener(items); });
+    void this.list().then((items) => { if (generation === this.generation) listener(items); }).catch(() => { if (generation === this.generation) listener([]); });
+    return unsubscribe;
+  }
+}
+
+export class HttpCollectionsRepository implements CollectionsRepository {
+  channel = new Channel<Collection>();
+  private cache: Collection[] | null = null;
+  private scopeId: string | null | undefined;
+  private generation = 0;
+
+setUserScope(userId: string | null): void {
+    if (this.scopeId === userId) return;
+    this.scopeId = userId;
+    this.generation += 1;
+    this.cache = null;
+  }
+
+private collectionRow = (row: Record<string, unknown>): Collection => ({ id: String(row.id), name: String(row.name), description: String(row.description ?? ""), createdAt: String(row.created_at), updatedAt: String(row.updated_at) });
+  private itemRow = (row: Record<string, unknown>): CollectionItem => ({ kind: row.kind as CollectionItem["kind"], targetId: String(row.target_id), sortOrder: Number(row.sort_order) || 0, addedAt: String(row.added_at) });
+
+async list(): Promise<Collection[]> {
+    if (this.cache !== null) return this.cache;
+    const generation = this.generation;
+    const next = (await apiFetch<Record<string, unknown>[]>("/api/account/collections")).map(this.collectionRow);
+    if (generation === this.generation) this.cache = next;
+    return next;
+  }
+
+private async fetchFresh(): Promise<Collection[]> {
+    const generation = this.generation;
+    const next = (await apiFetch<Record<string, unknown>[]>("/api/account/collections")).map(this.collectionRow);
+    if (generation === this.generation) this.cache = next;
+    return next;
+  }
+
+async create(input: { name: string; description?: string }): Promise<Collection> { const row = await apiFetch<Record<string, unknown>>("/api/account/collections", { method: "POST", body: JSON.stringify(input) }); this.cache = null; this.channel.emit(await this.list()); return this.collectionRow(row); }
+  async update(id: string, patch: { name?: string; description?: string }): Promise<Collection> { const row = await apiFetch<Record<string, unknown>>(`/api/account/collections/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(patch) }); this.channel.emit(await this.fetchFresh()); return this.collectionRow(row); }
+  async remove(id: string): Promise<void> { await apiFetch(`/api/account/collections/${encodeURIComponent(id)}`, { method: "DELETE" }); this.channel.emit(await this.fetchFresh()); }
+  async items(collectionId: string): Promise<CollectionItem[]> { return (await apiFetch<Record<string, unknown>[]>(`/api/account/collections/${encodeURIComponent(collectionId)}/items`)).map(this.itemRow); }
+  async addItem(collectionId: string, kind: Favorite["kind"], targetId: string): Promise<CollectionItem[]> { await apiFetch(`/api/account/collections/${encodeURIComponent(collectionId)}/items`, { method: "POST", body: JSON.stringify({ kind, targetId }) }); return this.items(collectionId); }
+  async removeItem(collectionId: string, targetId: string): Promise<CollectionItem[]> { await apiFetch(`/api/account/collections/${encodeURIComponent(collectionId)}/items/${encodeURIComponent(targetId)}`, { method: "DELETE" }); return this.items(collectionId); }
+  subscribe(listener: Listener<Collection>): Unsubscribe {
+    const generation = this.generation;
+    const unsubscribe = this.channel.subscribe((items) => { if (generation === this.generation) listener(items); });
+    void this.list().then((items) => { if (generation === this.generation) listener(items); }).catch(() => { if (generation === this.generation) listener([]); });
+    return unsubscribe;
+  }
+}

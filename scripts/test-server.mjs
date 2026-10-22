@@ -13,13 +13,16 @@ import {
   toToolOverrideDbRow,
   mergeToolRegistry,
   parseExtraOrigins,
+  safeCollectionItemInput,
   safeConfig,
   safeNextRoute,
+  safePinnedToolIds,
   safeSteps,
   sanitizeAnalyticsEvent,
   tokenExpiry,
   upstreamStatus,
   validateCategoryOverride,
+  validateCollectionInput,
   validateRegistryImport,
   validateServerConfig,
   validateToolOverride,
@@ -295,6 +298,31 @@ ok("JWT expiry decoded for display", () => {
   assert.equal(tokenExpiry(`h.${body}.s`), new Date(1700000000 * 1000).toISOString());
 });
 ok("malformed token returns null", () => assert.equal(tokenExpiry("garbage"), null));
+
+/* ---------------- Phase 5: pinned tools + collections ---------------- */
+ok("pinned ids are trimmed, deduped, and capped", () => assert.deepEqual(safePinnedToolIds([" a ", "a", "b", "", null, "c"]), ["a", "b", "c"]));
+ok("pinned ids capped at 50", () => assert.equal(safePinnedToolIds(Array.from({ length: 80 }, (_, i) => `t${i}`)).length, 50));
+ok("non-array pinned input rejected", () => assert.deepEqual(safePinnedToolIds("json"), []));
+ok("collection create requires a name", () => {
+  const result = validateCollectionInput({}, { existingNames: [] });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.includes("required")));
+});
+ok("collection create rejects duplicate names", () => {
+  const result = validateCollectionInput({ name: "Ops" }, { existingNames: ["Ops"] });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.includes("already exists")));
+});
+ok("collection update may keep its own name", () => assert.equal(validateCollectionInput({ name: "Ops" }, { existingNames: [], requireName: false }).ok, true));
+ok("collection update rejects a taken name", () => assert.equal(validateCollectionInput({ name: "Ops" }, { existingNames: ["Ops"], requireName: false }).ok, false));
+ok("collection description truncated to 200 characters", () => {
+  const result = validateCollectionInput({ name: "Ops", description: "x".repeat(400) }, { existingNames: [] });
+  assert.equal(result.ok, true);
+  assert.equal(result.value.description.length, 200);
+});
+ok("valid collection item accepted", () => assert.deepEqual(safeCollectionItemInput({ kind: "tool", targetId: " json " }), { kind: "tool", targetId: "json" }));
+ok("invalid collection item kind rejected", () => assert.equal(safeCollectionItemInput({ kind: "widget", targetId: "json" }), null));
+ok("collection item without target rejected", () => assert.equal(safeCollectionItemInput({ kind: "tool", targetId: "" }), null));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
