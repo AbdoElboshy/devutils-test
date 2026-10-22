@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Search, Moon, Sun, Monitor, Menu, X, CornerDownLeft, Star, Clock, ChevronRight, Terminal, UserRound, LogOut, ShieldCheck } from "lucide-react";
 import { CATEGORIES, TOOLS } from "../lib/registry";
-import { searchDiscovery, toolDiscoveryHit, type DiscoveryHit } from "../lib/search";
+import { searchDiscovery, suggestFallback, toolDiscoveryHit, type DiscoveryHit } from "../lib/search";
 import { useFavorites, usePreferenceStorage, useRecents } from "./ui";
 import { cn } from "../utils/cn";
 import { isFeatureEnabled } from "../platform/features";
@@ -48,6 +48,12 @@ export function Header({ route, onNav, onOpenSearch }: { route: string; onNav: (
   const [accountMenu, setAccountMenu] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const auth = useAuth();
+  useEffect(() => {
+    if (!accountMenu) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setAccountMenu(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [accountMenu]);
   // Convenience only: the gateway re-checks admin role on every privileged call.
   useEffect(() => {
     let active = true;
@@ -91,7 +97,7 @@ export function Header({ route, onNav, onOpenSearch }: { route: string; onNav: (
           <ThemeToggle />
           {!auth.loading && (auth.user ? (
             <div className="relative hidden sm:block">
-              <button type="button" onClick={() => setAccountMenu(!accountMenu)} aria-expanded={accountMenu} className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-900 text-[11px] font-bold text-lime-300 dark:bg-zinc-100 dark:text-zinc-900" title="Account menu">{(auth.user.displayName || auth.user.email || "U").slice(0, 2).toUpperCase()}</button>
+              <button type="button" onClick={() => setAccountMenu(!accountMenu)} aria-expanded={accountMenu} aria-haspopup="menu" aria-label="Account menu" className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-900 text-[11px] font-bold text-lime-300 dark:bg-zinc-100 dark:text-zinc-900" title="Account menu">{(auth.user.displayName || auth.user.email || "U").slice(0, 2).toUpperCase()}</button>
               {accountMenu && <div className="absolute right-0 top-10 w-52 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-xl dark:border-zinc-700 dark:bg-zinc-950">
                 <div className="border-b border-zinc-100 px-2.5 py-2 dark:border-zinc-800"><p className="truncate text-[12.5px] font-semibold">{auth.user.displayName || "DevUtils user"}</p><p className="truncate text-[10.5px] text-zinc-400">{auth.user.email}</p></div>
                 {[["Dashboard", "/account"], ["Profile", "/account/profile"], ["Favorites", "/account/favorites"], ...(isAdmin ? [["Admin", "/admin"]] as [string, string][] : []), ["Settings", "/account/settings"]].map(([label, path]) => <button key={path} type="button" onClick={() => { onNav(path); setAccountMenu(false); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] hover:bg-zinc-100 dark:hover:bg-zinc-800">{label === "Admin" && <ShieldCheck size={13} className="text-emerald-600" />}{label}</button>)}
@@ -187,12 +193,13 @@ export function CommandPalette({ open, onClose, onNav }: { open: boolean; onClos
       if (!out.length) return searchDiscovery("", 8);
       return out;
     }
-    return searchDiscovery(q, 12);
+    const exact = searchDiscovery(q, 12);
+    return exact.length ? exact : suggestFallback(q, 5);
   }, [q, recents, favs]);
 
   useEffect(() => { setSel(0); }, [q ]);
   useEffect(() => {
-    if (!open || !q.trim() || hits.length) return;
+    if (!open || !q.trim() || (hits.length > 0 && hits.some((h) => h.reason !== "fuzzy suggestion"))) return;
     const timer = window.setTimeout(() => track({ name: "search_used", outcome: "failure" }), 1200);
     return () => window.clearTimeout(timer);
   }, [open, q, hits.length]);

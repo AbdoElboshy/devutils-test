@@ -73,3 +73,33 @@ export function toolDiscoveryHit(id: string, reason?: string): DiscoveryHit | nu
   const tool = TOOL_MAP[id];
   return tool ? { id: tool.id, kind: "tool", title: tool.name, description: tool.description, route: tool.route, score: 1, reason } : null;
 }
+
+export function suggestFallback(query: string, suggestLimit = 5): DiscoveryHit[] {
+  const q = query.trim();
+  if (!q) return [];
+  const tokens = q.toLowerCase().split(/[\s\W]+/).filter((t) => t.length > 1);
+  const score = (title: string) => {
+    const lower = title.toLowerCase();
+    let s = 0;
+    tokens.forEach((token) => {
+      if (lower.includes(token)) s += 10;
+      let i = 0;
+      for (const ch of lower) {
+        if (ch === token[i]) i += 1;
+        if (i === token.length) break;
+      }
+      if (i === token.length) s += 3;
+    });
+    return s;
+  };
+  const toolHits = searchTools("", 500).map(({ tool }) => ({
+    id: tool.id, kind: "tool" as const, title: tool.name, description: tool.description,
+    route: tool.route, score: score(tool.name), reason: "fuzzy suggestion",
+  })).filter((h) => h.score > 0);
+  const catHits = CATEGORIES.map((category) => ({
+    id: `category:${category.id}`, kind: "category" as const, title: category.name,
+    description: category.description, route: `/categories/${category.slug}`,
+    score: score(category.name), reason: "fuzzy suggestion",
+  })).filter((h) => h.score > 0);
+  return [...toolHits, ...catHits].sort((a, b) => b.score - a.score || a.title.localeCompare(b.title)).slice(0, suggestLimit);
+}

@@ -20,3 +20,5 @@ public/sitemap.xml.orig
 !.vscode/extensions.json
 .idea/
 *.swp
+scripts/__pycache__/
+*.pyc

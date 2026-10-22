@@ -346,6 +346,12 @@ function ToolEditor({ tool, categories, onClose, onSaved, onError }: {
   const list = (value: string[]) => value.join(", ");
   const unlist = (value: string) => value.split(",").map((v) => v.trim()).filter(Boolean);
 
+  const baseline = JSON.stringify({ id: tool.id, name: tool.name, slug: tool.slug, description: tool.description, longDescription: tool.longDescription, category: tool.category, keywords: tool.keywords, aliases: tool.aliases, related: tool.related, tags: tool.tags ?? [], featured: Boolean(tool.featured), visibility: (tool.visibility as ToolOverlay["visibility"]) ?? "published", order: tool.order ?? 0 });
+  const confirmClose = () => {
+    if (JSON.stringify(form) !== baseline && !window.confirm("You have unsaved edits. Discard them?")) return;
+    onClose();
+  };
+
   const save = async () => {
     setBusy(true); setErrors([]);
     try { await saveToolOverride(tool.id, form); await onSaved(`Saved ${tool.name}`); onClose(); }
@@ -364,7 +370,7 @@ function ToolEditor({ tool, categories, onClose, onSaved, onError }: {
           <h2 className="text-[15px] font-extrabold">Edit {tool.name}</h2>
           <p className="mt-0.5 font-mono text-[11.5px] text-zinc-400">{tool.id} — implementation id is fixed; metadata is editable</p>
         </div>
-        <button type="button" onClick={onClose} aria-label="Close editor" className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800"><X size={16} /></button>
+        <button type="button" onClick={confirmClose} aria-label="Close editor" className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800"><X size={16} /></button>
       </div>
 
       <div className="mt-3 grid gap-3 md:grid-cols-2">
@@ -397,7 +403,7 @@ function ToolEditor({ tool, categories, onClose, onSaved, onError }: {
       </p>
       <div className="mt-3 flex gap-2">
         <Btn variant="primary" onClick={() => { void save(); }} disabled={busy}>{busy ? "Saving…" : "Save changes"}</Btn>
-        <Btn onClick={onClose} disabled={busy}>Cancel</Btn>
+        <Btn onClick={confirmClose} disabled={busy}>Cancel</Btn>
       </div>
     </Panel>
   );
@@ -512,6 +518,12 @@ function CategoryEditor({ category, toolCount, onClose, onSaved, onError }: {
   const [form, setForm] = useState<CategoryOverlay>({ id: category.id, name: category.name, slug: category.slug, description: category.description, tagline: category.tagline, order: category.order ?? 0, enabled: category.enabled !== false });
   const [busy, setBusy] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
+  const baseline = JSON.stringify({ id: category.id, name: category.name, slug: category.slug, description: category.description, tagline: category.tagline, order: category.order ?? 0, enabled: category.enabled !== false });
+  const confirmClose = () => {
+    if (JSON.stringify(form) !== baseline && !window.confirm("You have unsaved edits. Discard them?")) return;
+    onClose();
+  };
+
   const save = async () => {
     setBusy(true); setErrors([]);
     try { await saveCategoryOverride(category.id, form); await onSaved(`Saved ${form.name}`); onClose(); }
@@ -522,7 +534,7 @@ function CategoryEditor({ category, toolCount, onClose, onSaved, onError }: {
     <Panel className="p-4">
       <div className="flex items-start justify-between gap-3">
         <div><h2 className="text-[15px] font-extrabold">Edit {category.name}</h2><p className="mt-0.5 font-mono text-[11.5px] text-zinc-400">{category.id} · {toolCount} tool(s) assigned</p></div>
-        <button type="button" onClick={onClose} aria-label="Close editor" className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X size={16} /></button>
+        <button type="button" onClick={confirmClose} aria-label="Close editor" className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X size={16} /></button>
       </div>
       <div className="mt-3 grid gap-3 md:grid-cols-2">
         <Field label="Name"><TextInput value={form.name ?? ""} onChange={(e) => setForm({ ...form, name: e.target.value })} maxLength={60} /></Field>
@@ -533,7 +545,7 @@ function CategoryEditor({ category, toolCount, onClose, onSaved, onError }: {
         <label className="flex items-center gap-2 pb-2 text-[13px]"><input type="checkbox" checked={form.enabled !== false} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} className="h-4 w-4 accent-emerald-600" /> Visible in navigation</label>
       </div>
       {errors.length > 0 && <div className="mt-3"><ErrorCallout title="Validation failed" message={errors.join(" · ")} /></div>}
-      <div className="mt-3 flex gap-2"><Btn variant="primary" onClick={() => { void save(); }} disabled={busy}>{busy ? "Saving…" : "Save category"}</Btn><Btn onClick={onClose} disabled={busy}>Cancel</Btn></div>
+      <div className="mt-3 flex gap-2"><Btn variant="primary" onClick={() => { void save(); }} disabled={busy}>{busy ? "Saving…" : "Save category"}</Btn><Btn onClick={confirmClose} disabled={busy}>Cancel</Btn></div>
     </Panel>
   );
 }
@@ -574,6 +586,7 @@ function Analytics() {
         {data && <p className="pb-2 font-mono text-[11px] text-zinc-400">collected {new Date(data.collectedAt).toLocaleString()}</p>}
       </Panel>
       {error && <ErrorCallout title="Analytics unavailable" message={error} hint="The dashboard never renders fabricated numbers when a query fails." />}
+      {!data && !error && <Panel className="p-8 text-center text-sm text-zinc-500">Loading analytics…</Panel>}
       {data && (
         <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -659,13 +672,24 @@ function Analytics() {
 
 function AuditLog() {
   const [rows, setRows] = useState<AuditEntry[] | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  useEffect(() => { fetchAdminAudit(80).then(setRows).catch((c: unknown) => setError(c instanceof Error ? c.message : "Audit unavailable.")); }, []);
+  const load = useCallback(() => {
+    setError("");
+    setLoading(true);
+    fetchAdminAudit(80)
+      .then(setRows)
+      .catch((c: unknown) => setError(c instanceof Error ? c.message : "Audit unavailable."))
+      .finally(() => setLoading(false));
+  }, []);
+  useEffect(() => { load(); }, [load]);
   return (
     <Panel className="p-4">
       <h2 className="text-[14px] font-extrabold">Audit log</h2>
       <p className="mt-1 text-[12.5px] text-zinc-500">Administrative and account events. Passwords, tokens, API keys, and tool input are never recorded.</p>
       {error && <div className="mt-3"><ErrorCallout title="Audit unavailable" message={error} /></div>}
+      {error && <div className="mt-3"><Btn onClick={load}>Retry</Btn></div>}
+      {loading && !error && <p className="mt-3 text-[13px] text-zinc-500">Loading audit events…</p>}
       {rows && (
         <div className="mt-3 max-h-[60vh] overflow-auto rounded-xl border border-zinc-200 dark:border-zinc-800">
           {rows.length ? rows.map((row) => (
@@ -697,6 +721,7 @@ function Health() {
         {data?.migrationRequired && <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11.5px] font-bold text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">migration required</span>}
       </Panel>
       {error && <ErrorCallout title="Health check failed" message={error} />}
+      {!data && !error && <Panel className="p-8 text-center text-sm text-zinc-500">Running health checks…</Panel>}
       {data && (
         <Panel className="overflow-hidden">
           <table className="w-full border-collapse text-left text-[13px]">

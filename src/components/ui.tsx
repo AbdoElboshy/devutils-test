@@ -163,7 +163,7 @@ export function Tabs({ tabs, active, onChange, ariaLabel }: { tabs: { id: string
     <div ref={ref} role="tablist" aria-label={ariaLabel ?? "Operations"}
       className="flex flex-wrap gap-1 rounded-xl bg-zinc-100 p-1 dark:bg-zinc-900">
       {tabs.map((t) => (
-        <button key={t.id} role="tab" aria-selected={active === t.id} title={t.hint}
+        <button key={t.id} role="tab" aria-selected={active === t.id} tabIndex={active === t.id ? 0 : -1} title={t.hint}
           onClick={() => onChange(t.id)}
           onKeyDown={(e) => {
             if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;

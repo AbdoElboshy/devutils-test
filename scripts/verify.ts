@@ -1,5 +1,6 @@
 // DevUtils verification — critical functionality per spec §43 + acceptance scenarios.
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import {
   formatJson, minifyJson, sortJson, flattenJson, unflattenJson, queryJsonPath, queryJsonPointer, applyJsonPatch, applyJsonMergePatch,
   jsonToYaml, yamlToJson, jsonToCsv, csvToJson, jsonToToml, tomlToJson, jsonToSchema, formatSql, minifySql, explainRegex, jsonToXml, formatXml,
@@ -13,7 +14,7 @@ import { inspectCertificateDocument } from "../src/lib/certificates";
 import { genPassword, genPassphrase, genToken, genUuid, genHex, passwordStrength, formatInZone, dateDiff, addToDate, businessDays, calcAge } from "../src/lib/engine";
 import { searchTools, TOOLS, CATEGORIES, applyRegistryOverlays, resetRegistry } from "../src/lib/registry";
 import { parseCurl, curlToPython, dockerRun, k8sDeployment, ERROR_DB, buildGrep } from "../src/lib/blueprints";
-import { searchDiscovery } from "../src/lib/search";
+import { searchDiscovery, suggestFallback } from "../src/lib/search";
 import { analyzeErrorText } from "../src/lib/error-explorer";
 import { deduplicateLogs, detectLogFormat, extractLogErrors, logSummary, normalizeLogTimestamps } from "../src/lib/logs";
 import { formatGraphql, openApiClientSkeleton, openApiToTypeScript, validateGraphql, validateOpenApi } from "../src/lib/api-schema";
@@ -22,6 +23,7 @@ import { WORKFLOW_TEMPLATES } from "../src/data/workflows";
 import { capabilities, isFeatureEnabled } from "../src/platform/features";
 import { awsCliCommand, awsSecurityGroupRule, buildArn, buildIamPolicy, buildLogQl, buildPromQl, calculateMetric, calculateSlo, grafanaDashboard, grafanaTemplate, infrastructureName, parseArn, parseAzureResourceId, parseGcpResource, parseS3Url, percentile, prometheusRule, prometheusScrapeConfig, validateGrafanaDashboard, zabbixApiExample, zabbixExpression, zabbixItem, zabbixLinuxTemplate, zabbixTemplate, zabbixTrigger } from "../src/lib/devops-platform";
 import { AnonymousAuthProvider } from "../src/platform/auth";
+import { classifyRoute } from "../src/lib/routes";
 
 let pass = 0, fail = 0;
 function eq(name: string, a: unknown, b: unknown) {
@@ -400,5 +402,46 @@ eq("AWS search", searchTools("aws arn", 20).some((hit) => hit.tool.id === "aws-a
   eq("calcAge readable", /years/.test(calcAge("1990-06-15")), true);
 }
 
+
+// --- P4: route classification (404 regression) ---
+{
+  const c = (r: string, w = true) => classifyRoute(r, w);
+  eq("routes: known tool route -> tool", c(TOOLS[0]!.route).kind, "tool");
+  eq("routes: home -> home", c("/").kind, "home");
+  eq("routes: tools index -> tools", c("/tools").kind, "tools");
+  eq("routes: workflows enabled -> workflows", c("/workflows", true).kind, "workflows");
+  eq("404: workflows disabled -> not-found", c("/workflows", false).kind, "not-found");
+  eq("routes: login -> auth", c("/login").kind, "auth");
+  const adminC = c("/admin/nonsense");
+  if (adminC.kind !== "admin") throw new Error("expected admin classification");
+  eq("routes: admin invalid section falls back to overview", adminC.section, "overview");
+  const accountC = c("/account/nonsense");
+  if (accountC.kind !== "account") throw new Error("expected account classification");
+  eq("routes: account invalid section falls back to dashboard", accountC.section, "dashboard");
+  eq("routes: known category -> category", c(`/categories/${CATEGORIES[0]!.slug}`).kind, "category");
+  eq("404: unknown category slug -> not-found", c("/categories/not-a-real-category").kind, "not-found");
+  eq("404: bogus route -> not-found", c("/no-such-tool-xyz").kind, "not-found");
+  eq("routes: about still resolves", c("/about").kind, "about");
+}
+
+
+// --- P4: search no-result suggestions ---
+{
+  eq("suggest: typo query returns suggestions", suggestFallback("jso").length > 0, true);
+  eq("suggest: json typo still suggests json tools", suggestFallback("jsn").some((h) => h.title.toLowerCase().includes("json")), true);
+  eq("suggest: pure gibberish returns none", suggestFallback("zzzzqqq").length, 0);
+}
+
+
+// --- P4: accessibility attributes (static source checks) ---
+{
+  const chromeSrc = readFileSync("src/components/chrome.tsx", "utf8");
+  const uiSrc = readFileSync("src/components/ui.tsx", "utf8");
+  eq("a11y: palette combobox + active descendant", chromeSrc.includes('role="combobox"') && chromeSrc.includes("aria-activedescendant"), true);
+  eq("a11y: account menu declares popup menu", chromeSrc.includes('aria-haspopup="menu"'), true);
+  eq("a11y: palette dialog semantics", chromeSrc.includes('role="dialog"') && chromeSrc.includes('aria-modal="true"'), true);
+  eq("a11y: shared switch/tablist/aria-pressed", uiSrc.includes('role="switch"') && uiSrc.includes('role="tablist"') && uiSrc.includes("aria-pressed"), true);
+  eq("a11y: tabs roving tabIndex", uiSrc.includes("tabIndex={active === t.id ? 0 : -1}"), true);
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
