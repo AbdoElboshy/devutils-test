@@ -92,7 +92,7 @@ export function AdminPage({ section, onNav }: { section: Section; onNav: (route:
 
       <div className="mt-5 grid gap-5 lg:grid-cols-[196px_1fr]">
         <nav aria-label="Admin sections" className="flex gap-1 overflow-x-auto pb-1 lg:block lg:space-y-1">
-          {SECTIONS.map((item) => (
+          {(role === "moderator" ? SECTIONS.filter((item) => item.id !== "users") : SECTIONS).map((item) => (
             <button key={item.id} type="button" onClick={() => onNav(item.id === "overview" ? "/admin" : `/admin/${item.id}`)} aria-current={section === item.id ? "page" : undefined}
               className={cn("flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-[13px] font-medium transition lg:w-full",
                 section === item.id ? "bg-zinc-900 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-900" : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900")}>
