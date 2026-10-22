@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import {
   ANALYTICS_EVENTS,
   isAllowedOrigin,
-  isActiveAdminRecord,
+  activeAdminRole, hasMinRole, isActiveAdminRecord,
   isCsrfValid,
   toToolOverrideDbRow,
   mergeToolRegistry,
@@ -284,7 +284,17 @@ ok("allowlist matches documented events", () => assert.equal(ANALYTICS_EVENTS.in
 /* ---------------- administrator authorization record ---------------- */
 ok("active administrator record accepted", () => assert.equal(isActiveAdminRecord({ role: "admin", revoked_at: null }), true));
 ok("revoked administrator record rejected", () => assert.equal(isActiveAdminRecord({ role: "admin", revoked_at: "2026-10-19T12:00:00.000Z" }), false));
-ok("non-admin role rejected", () => assert.equal(isActiveAdminRecord({ role: "moderator", revoked_at: null }), false));
+ok("moderator is an active admin-tier record (phase6)", () => assert.equal(isActiveAdminRecord({ role: "moderator", revoked_at: null }), true));
+ok("super_admin is an active admin-tier record (phase6)", () => assert.equal(isActiveAdminRecord({ role: "super_admin", revoked_at: null }), true));
+ok("unknown role rejected (phase6)", () => assert.equal(isActiveAdminRecord({ role: "owner", revoked_at: null }), false));
+ok("activeAdminRole resolves moderator (phase6)", () => assert.equal(activeAdminRole({ role: "moderator", revoked_at: null }), "moderator"));
+ok("activeAdminRole resolves super_admin (phase6)", () => assert.equal(activeAdminRole({ role: "super_admin", revoked_at: null }), "super_admin"));
+ok("activeAdminRole null for revoked (phase6)", () => assert.equal(activeAdminRole({ role: "admin", revoked_at: "2026-10-19T12:00:00.000Z" }), null));
+ok("hasMinRole moderator below admin (phase6)", () => assert.equal(hasMinRole("moderator", "admin"), false));
+ok("hasMinRole admin meets admin (phase6)", () => assert.equal(hasMinRole("admin", "admin"), true));
+ok("hasMinRole super_admin meets admin (phase6)", () => assert.equal(hasMinRole("super_admin", "admin"), true));
+ok("hasMinRole admin below super_admin (phase6)", () => assert.equal(hasMinRole("admin", "super_admin"), false));
+ok("hasMinRole unknown role never passes (phase6)", () => assert.equal(hasMinRole("owner", "moderator"), false));
 ok("missing administrator record rejected", () => assert.equal(isActiveAdminRecord(null), false));
 
 /* ---------------- error mapping ---------------- */
