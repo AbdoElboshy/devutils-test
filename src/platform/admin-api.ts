@@ -115,3 +115,21 @@ export async function setUserRole(id: string, role: string): Promise<unknown> {
 export async function revokeUserRole(id: string): Promise<unknown> {
   return apiFetch(`/api/admin/users/${encodeURIComponent(id)}/role`, { method: "DELETE" });
 }
+
+/* ---------------- Phase 6 WS C/D: flags + version history ---------------- */
+
+export type AdminFlag = { key: string; enabled: boolean; defaultEnabled: boolean; overridden: boolean; updatedAt: string | null };
+export type ToolVersion = { id: number; patch: Record<string, unknown>; change_kind: string; changed_by: string | null; created_at: string };
+
+export async function fetchAdminFlags(): Promise<AdminFlag[]> {
+  return apiFetch("/api/admin/flags");
+}
+export async function setFeatureFlag(key: string, enabled: boolean): Promise<unknown> {
+  return apiFetch(`/api/admin/flags/${encodeURIComponent(key)}`, { method: "PUT", body: JSON.stringify({ enabled }) });
+}
+export async function fetchToolHistory(id: string): Promise<ToolVersion[]> {
+  return apiFetch(`/api/admin/tools/${encodeURIComponent(id)}/history`);
+}
+export async function restoreToolVersion(id: string, versionId: number): Promise<unknown> {
+  return apiFetch(`/api/admin/tools/${encodeURIComponent(id)}/restore`, { method: "POST", body: JSON.stringify({ versionId }) });
+}

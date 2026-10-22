@@ -98,5 +98,11 @@ export class CapabilityService implements EntitlementService {
 export const capabilities = new CapabilityService();
 
 export function isFeatureEnabled(flag: FeatureFlag): boolean {
+  /* Phase 6 WS D: gateway-mediated flags (from runtime-config.js) win;
+     the static table is the offline/failure fallback. */
+  const gateway = typeof window !== "undefined"
+    ? (window as unknown as { __DEVUTILS_CONFIG__?: { flags?: Partial<Record<FeatureFlag, boolean>> } }).__DEVUTILS_CONFIG__?.flags
+    : undefined;
+  if (gateway && flag in gateway) return Boolean(gateway[flag]);
   return FEATURE_FLAGS[flag];
 }
