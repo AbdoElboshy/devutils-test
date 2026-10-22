@@ -15,12 +15,15 @@ import {
   isCsrfValid,
   mergeToolRegistry,
   parseExtraOrigins,
+  safeCollectionItemInput,
   safeConfig,
   safeNextRoute,
+  safePinnedToolIds,
   safeSteps,
   sanitizeAnalyticsEvent,
   tokenExpiry,
   upstreamStatus,
+  validateCollectionInput,
   validateCategoryOverride,
   validateRegistryImport,
   validateServerConfig,
@@ -586,6 +589,117 @@ app.delete("/api/account", async (req, res) => {
   const r = await service.auth.admin.deleteUser(req.devutils.user.id);
   if (r.error) return sendError(res, r.error, "Account deletion failed.");
   clearSessionCookies(res);
+  res.json({ ok: true });
+});
+/* ------------------------------------------------------------------ *
+ * Pinned tools + personal collections (Phase 5; same account guards,
+ * user-scoped rows, RLS also enforced in PostgreSQL)
+ * ------------------------------------------------------------------ */
+
+app.get("/api/account/pinned", async (req, res) => {
+  const r = await userDb(req.devutils.access).from("pinned_tools").select("tool_id,sort_order,created_at").order("sort_order", { ascending: true });
+  if (r.error) return sendError(res, r.error, "Pinned tools unavailable.");
+  res.json(r.data);
+});
+app.post("/api/account/pinned/:id", async (req, res) => {
+  const toolId = String(req.params.id).slice(0, 200);
+  if (!toolId) return res.status(400).json({ error: "Tool ID required." });
+  const db = userDb(req.devutils.access);
+  const count = await db.from("pinned_tools").select("tool_id", { count: "exact", head: true });
+  if (count.error) return sendError(res, count.error, "Pin failed.");
+  if ((count.count ?? 0) >= 50) return res.status(429).json({ error: "Pinned tools limit reached." });
+  const existing = await db.from("pinned_tools").select("tool_id").eq("tool_id", toolId).maybeSingle();
+  if (existing.error) return sendError(res, existing.error, "Pin failed.");
+  if (existing.data) return res.json({ ok: true });
+  const r = await db.from("pinned_tools").insert({ user_id: req.devutils.user.id, tool_id: toolId, sort_order: count.count ?? 0 });
+  if (r.error) return sendError(res, r.error, "Pin failed.");
+  res.status(201).json({ ok: true });
+});
+app.delete("/api/account/pinned/:id", async (req, res) => {
+  const r = await userDb(req.devutils.access).from("pinned_tools").delete().eq("tool_id", String(req.params.id).slice(0, 200));
+  if (r.error) return sendError(res, r.error, "Unpin failed.");
+  res.json({ ok: true });
+});
+app.put("/api/account/pinned", async (req, res) => {
+  const toolIds = safePinnedToolIds(req.body?.toolIds);
+  if (!toolIds.length) return res.status(400).json({ error: "At least one tool ID is required." });
+  const db = userDb(req.devutils.access);
+  const previous = await db.from("pinned_tools").select("tool_id,sort_order,created_at");
+  if (previous.error) return sendError(res, previous.error, "Reorder failed.");
+  const rows = previous.data ?? [];
+  const byId = new Map(rows.map((row) => [row.tool_id, row]));
+  const ordered = toolIds.map((toolId, index) => ({ tool_id: toolId, sort_order: index, created_at: byId.get(toolId)?.created_at ?? new Date().toISOString() }));
+  const keep = rows.filter((row) => !toolIds.includes(row.tool_id)).map((row) => ({ tool_id: row.tool_id, sort_order: ordered.length + (row.sort_order ?? 0), created_at: row.created_at }));
+  const removed = await db.from("pinned_tools").delete().neq("tool_id", "");
+  if (removed.error) return sendError(res, removed.error, "Reorder failed.");
+  const inserted = await db.from("pinned_tools").insert([...ordered, ...keep].map((row) => ({ user_id: req.devutils.user.id, ...row })));
+  if (inserted.error) {
+    // Best-effort restore so a mid-reorder failure never silently drops pins.
+    await db.from("pinned_tools").insert(rows.map((row) => ({ user_id: req.devutils.user.id, tool_id: row.tool_id, sort_order: row.sort_order, created_at: row.created_at })));
+    return sendError(res, inserted.error, "Reorder failed.");
+  }
+  res.json({ ok: true });
+});
+
+app.get("/api/account/collections", async (req, res) => {
+  const r = await userDb(req.devutils.access).from("collections").select("id,name,description,created_at,updated_at").order("updated_at", { ascending: false });
+  if (r.error) return sendError(res, r.error, "Collections unavailable.");
+  res.json(r.data);
+});
+app.post("/api/account/collections", async (req, res) => {
+  const db = userDb(req.devutils.access);
+  const existing = await db.from("collections").select("name");
+  if (existing.error) return sendError(res, existing.error, "Collections unavailable.");
+  const result = validateCollectionInput(req.body, { existingNames: (existing.data ?? []).map((row) => row.name), requireName: true });
+  if (!result.ok) return res.status(400).json({ errors: result.errors });
+  const r = await db.from("collections").insert({ user_id: req.devutils.user.id, name: result.value.name, description: result.value.description })
+    .select("id,name,description,created_at,updated_at").single();
+  if (r.error) return sendError(res, r.error, "Collection creation failed.");
+  res.status(201).json(r.data);
+});
+app.put("/api/account/collections/:id", async (req, res) => {
+  const db = userDb(req.devutils.access);
+  const current = await db.from("collections").select("id,name,description").eq("id", String(req.params.id)).maybeSingle();
+  if (current.error || !current.data) return res.status(404).json({ error: "Collection not found." });
+  const existing = await db.from("collections").select("name");
+  if (existing.error) return sendError(res, existing.error, "Collections unavailable.");
+  const result = validateCollectionInput(req.body, { existingNames: (existing.data ?? []).map((row) => row.name).filter((name) => name !== current.data.name), requireName: false });
+  if (!result.ok) return res.status(400).json({ errors: result.errors });
+  const r = await db.from("collections").update({
+    name: result.value.name || current.data.name,
+    description: req.body?.description !== undefined ? result.value.description : current.data.description,
+    updated_at: new Date().toISOString(),
+  }).eq("id", current.data.id).select("id,name,description,created_at,updated_at").single();
+  if (r.error) return sendError(res, r.error, "Collection update failed.");
+  res.json(r.data);
+});
+app.delete("/api/account/collections/:id", async (req, res) => {
+  const r = await userDb(req.devutils.access).from("collections").delete().eq("id", String(req.params.id));
+  if (r.error) return sendError(res, r.error, "Collection deletion failed.");
+  res.json({ ok: true });
+});
+app.get("/api/account/collections/:id/items", async (req, res) => {
+  const r = await userDb(req.devutils.access).from("collection_items").select("kind,target_id,sort_order,added_at").eq("collection_id", String(req.params.id)).order("sort_order", { ascending: true });
+  if (r.error) return sendError(res, r.error, "Collection items unavailable.");
+  res.json(r.data);
+});
+app.post("/api/account/collections/:id/items", async (req, res) => {
+  const item = safeCollectionItemInput(req.body);
+  if (!item) return res.status(400).json({ error: "Invalid collection item." });
+  const db = userDb(req.devutils.access);
+  const collection = await db.from("collections").select("id").eq("id", String(req.params.id)).maybeSingle();
+  if (collection.error || !collection.data) return res.status(404).json({ error: "Collection not found." });
+  const count = await db.from("collection_items").select("target_id", { count: "exact", head: true }).eq("collection_id", collection.data.id);
+  if (count.error) return sendError(res, count.error, "Adding item failed.");
+  if ((count.count ?? 0) >= 100) return res.status(429).json({ error: "Collection item limit reached." });
+  const r = await db.from("collection_items").upsert({ collection_id: collection.data.id, user_id: req.devutils.user.id, kind: item.kind, target_id: item.targetId, sort_order: count.count ?? 0 }, { onConflict: "collection_id,target_id" })
+    .select("kind,target_id,sort_order,added_at");
+  if (r.error) return sendError(res, r.error, "Adding item failed.");
+  res.status(201).json(r.data);
+});
+app.delete("/api/account/collections/:id/items/:targetId", async (req, res) => {
+  const r = await userDb(req.devutils.access).from("collection_items").delete().eq("collection_id", String(req.params.id)).eq("target_id", String(req.params.targetId).slice(0, 200));
+  if (r.error) return sendError(res, r.error, "Removing item failed.");
   res.json({ ok: true });
 });
 

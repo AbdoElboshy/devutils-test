@@ -87,6 +87,11 @@ export class AdaptivePresetRepository extends AdaptiveBase<SavedPreset> implemen
 export class AdaptivePinnedToolsRepository extends AdaptiveBase<PinnedTool> implements PinnedToolsRepository {
   declare protected local: PinnedToolsRepository;
   declare protected cloud: PinnedToolsRepository | null;
+
+  constructor(auth: AuthProvider, local: PinnedToolsRepository, cloud: (PinnedToolsRepository & { setUserScope?: (userId: string | null) => void }) | null) {
+    super(auth, local, cloud, (user) => cloud?.setUserScope?.(user?.id ?? null));
+  }
+
   async list(): Promise<PinnedTool[]> { return this.authenticated && this.cloud ? this.cloud.list() : this.local.list(); }
   async pin(toolId: string): Promise<PinnedTool[]> { return this.authenticated && this.cloud ? this.cloud.pin(toolId) : this.local.pin(toolId); }
   async unpin(toolId: string): Promise<PinnedTool[]> { return this.authenticated && this.cloud ? this.cloud.unpin(toolId) : this.local.unpin(toolId); }
@@ -96,6 +101,11 @@ export class AdaptivePinnedToolsRepository extends AdaptiveBase<PinnedTool> impl
 export class AdaptiveCollectionsRepository extends AdaptiveBase<Collection> implements CollectionsRepository {
   declare protected local: CollectionsRepository;
   declare protected cloud: CollectionsRepository | null;
+
+  constructor(auth: AuthProvider, local: CollectionsRepository, cloud: (CollectionsRepository & { setUserScope?: (userId: string | null) => void }) | null) {
+    super(auth, local, cloud, (user) => cloud?.setUserScope?.(user?.id ?? null));
+  }
+
   async list(): Promise<Collection[]> { return this.authenticated && this.cloud ? this.cloud.list() : this.local.list(); }
   async create(input: { name: string; description?: string }): Promise<Collection> { return this.authenticated && this.cloud ? this.cloud.create(input) : this.local.create(input); }
   async update(id: string, patch: { name?: string; description?: string }): Promise<Collection> { return this.authenticated && this.cloud ? this.cloud.update(id, patch) : this.local.update(id, patch); }

@@ -389,3 +389,41 @@ export function safeNextRoute(value, fallback = "/") {
   if (/^\/(tools|categories|account)\/[a-z0-9-]{1,80}$/.test(next)) return next;
   return fallback;
 }
+
+/* ------------------------------------------------------------------ *
+ * Phase 5 — pinned tools + personal collections
+ * ------------------------------------------------------------------ */
+
+const FAVORITE_KINDS = ["tool", "toolkit", "workflow", "integration"];
+
+/** Normalizes a pinned-tool reorder payload: strings only, trimmed, deduped, capped. */
+export function safePinnedToolIds(value, { max = 50 } = {}) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const ids = [];
+  for (const item of value.slice(0, max)) {
+    const id = String(item ?? "").trim().slice(0, 200);
+    if (id && !seen.has(id)) { seen.add(id); ids.push(id); }
+  }
+  return ids;
+}
+
+/** Validates collection create/update payloads. Names are unique per user. */
+export function validateCollectionInput(body, { existingNames = [], requireName = true } = {}) {
+  const errors = [];
+  const name = String(body?.name ?? "").trim().slice(0, 60);
+  const description = String(body?.description ?? "").trim().slice(0, 200);
+  if (requireName || body?.name !== undefined) {
+    if (!name) errors.push("Collection name is required.");
+    else if (existingNames.includes(name)) errors.push("A collection with that name already exists.");
+  }
+  return errors.length ? { ok: false, errors } : { ok: true, value: { name, description } };
+}
+
+/** Validates a collection-item payload; returns null when invalid. */
+export function safeCollectionItemInput(body) {
+  const kind = FAVORITE_KINDS.includes(body?.kind) ? body.kind : null;
+  const targetId = String(body?.targetId ?? "").trim().slice(0, 200);
+  if (!kind || !targetId) return null;
+  return { kind, targetId };
+}

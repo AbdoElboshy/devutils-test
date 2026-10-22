@@ -5,7 +5,7 @@ import { localCollections, localFavorites, localPinnedTools, localPresets, local
 import { operations } from "./operations";
 import { AdaptiveCollectionsRepository, AdaptiveFavoritesRepository, AdaptivePinnedToolsRepository, AdaptivePresetRepository, AdaptiveRecentToolsRepository, AdaptiveWorkflowRepository } from "./adaptive-repositories";
 import { AccountMergeService } from "./account-sync";
-import { HttpApiKeyRepository, HttpAuditRepository, HttpFavoritesRepository, HttpPresetRepository, HttpProfileRepository, HttpRecentToolsRepository, HttpUsageService, HttpWorkflowRepository } from "./http-repositories";
+import { HttpApiKeyRepository, HttpAuditRepository, HttpCollectionsRepository, HttpFavoritesRepository, HttpPinnedToolsRepository, HttpPresetRepository, HttpProfileRepository, HttpRecentToolsRepository, HttpUsageService, HttpWorkflowRepository } from "./http-repositories";
 import type { IntegrationRepository } from "./contracts";
 
 // Single composition root. Cloud repositories/providers can replace these bindings
@@ -13,7 +13,7 @@ import type { IntegrationRepository } from "./contracts";
 const auth = platformConfig.authMode === "server" ? new HttpAuthProvider() : new AnonymousAuthProvider();
 const integrations: IntegrationRepository | null = null;
 const cloud = platformConfig.authMode === "server" ? {
-  favorites: new HttpFavoritesRepository(), recentTools: new HttpRecentToolsRepository(), workflows: new HttpWorkflowRepository(), presets: new HttpPresetRepository(), profile: new HttpProfileRepository(), apiKeys: new HttpApiKeyRepository(), usage: new HttpUsageService(), audit: new HttpAuditRepository(), integrations: null,
+  favorites: new HttpFavoritesRepository(), recentTools: new HttpRecentToolsRepository(), workflows: new HttpWorkflowRepository(), presets: new HttpPresetRepository(), profile: new HttpProfileRepository(), apiKeys: new HttpApiKeyRepository(), usage: new HttpUsageService(), audit: new HttpAuditRepository(), pinned: new HttpPinnedToolsRepository(), collections: new HttpCollectionsRepository(), integrations: null,
 } : null;
 
 export const platform = Object.freeze({
@@ -23,9 +23,8 @@ export const platform = Object.freeze({
   recentTools: new AdaptiveRecentToolsRepository(auth, localRecentTools, cloud?.recentTools ?? null),
   workflows: new AdaptiveWorkflowRepository(auth, localWorkflows, cloud?.workflows ?? null),
   presets: new AdaptivePresetRepository(auth, localPresets, cloud?.presets ?? null),
-  // Cloud bindings for pinned/collections land with their HTTP repositories (step 3).
-  pinned: new AdaptivePinnedToolsRepository(auth, localPinnedTools, null),
-  collections: new AdaptiveCollectionsRepository(auth, localCollections, null),
+  pinned: new AdaptivePinnedToolsRepository(auth, localPinnedTools, cloud?.pinned ?? null),
+  collections: new AdaptiveCollectionsRepository(auth, localCollections, cloud?.collections ?? null),
   profile: cloud?.profile ?? null,
   apiKeys: cloud?.apiKeys ?? null,
   usage: cloud?.usage ?? null,
