@@ -78,3 +78,40 @@ export async function fetchAdminHealth(): Promise<AdminHealth> {
 export async function fetchAdminMe(): Promise<{ role: string; userId: string; email: string | null }> {
   return apiFetch("/api/admin/me");
 }
+
+/* ---------------- Phase 6: user management ---------------- */
+
+export type AdminUser = {
+  id: string;
+  email: string | null;
+  createdAt: string;
+  lastSignInAt: string | null;
+  bannedUntil: string | null;
+  suspended: boolean;
+  role: string | null;
+};
+export type AdminUsersPage = { users: AdminUser[]; total: number; authTotal: number; page: number; pageSize: number };
+
+export async function fetchAdminUsers(params: { query?: string; status?: string; page?: number; pageSize?: number } = {}): Promise<AdminUsersPage> {
+  const qs = new URLSearchParams();
+  if (params.query) qs.set("query", params.query);
+  if (params.status && params.status !== "all") qs.set("status", params.status);
+  qs.set("page", String(params.page ?? 1));
+  qs.set("pageSize", String(params.pageSize ?? 25));
+  return apiFetch<AdminUsersPage>(`/api/admin/users?${qs.toString()}`);
+}
+export async function suspendUser(id: string): Promise<unknown> {
+  return apiFetch(`/api/admin/users/${encodeURIComponent(id)}/suspend`, { method: "POST" });
+}
+export async function reactivateUser(id: string): Promise<unknown> {
+  return apiFetch(`/api/admin/users/${encodeURIComponent(id)}/reactivate`, { method: "POST" });
+}
+export async function revokeUserAccess(id: string): Promise<unknown> {
+  return apiFetch(`/api/admin/users/${encodeURIComponent(id)}/revoke-access`, { method: "POST" });
+}
+export async function setUserRole(id: string, role: string): Promise<unknown> {
+  return apiFetch(`/api/admin/users/${encodeURIComponent(id)}/role`, { method: "PUT", body: JSON.stringify({ role }) });
+}
+export async function revokeUserRole(id: string): Promise<unknown> {
+  return apiFetch(`/api/admin/users/${encodeURIComponent(id)}/role`, { method: "DELETE" });
+}
