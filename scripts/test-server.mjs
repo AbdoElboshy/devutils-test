@@ -294,7 +294,32 @@ ok("hasMinRole moderator below admin (phase6)", () => assert.equal(hasMinRole("m
 ok("hasMinRole admin meets admin (phase6)", () => assert.equal(hasMinRole("admin", "admin"), true));
 ok("hasMinRole super_admin meets admin (phase6)", () => assert.equal(hasMinRole("super_admin", "admin"), true));
 ok("hasMinRole admin below super_admin (phase6)", () => assert.equal(hasMinRole("admin", "super_admin"), false));
-ok("hasMinRole unknown role never passes (phase6)", () => assert.equal(hasMinRole("owner", "moderator"), false));
+ok("hasMinRole unknown role never passes (phase6)", () => assert.equal(hasMinRole("owner", "moderator"), false));\n\n/* ---------------- phase6: admin route gating matrix ---------------- */
+/* Every /api/admin route and its minimum tier, pinned via hasMinRole so a
+   future edit cannot silently widen a gate. Server middleware (requireRole)
+   is the enforcement; this matrix is its characterization test. */
+const ADMIN_ROUTE_GATES = [
+  { route: "base /api/admin middleware", min: "moderator" },
+  { route: "GET /api/admin/me", min: "moderator" },
+  { route: "GET /api/admin/users", min: "admin" },
+  { route: "POST /api/admin/users/:id/suspend", min: "admin" },
+  { route: "POST /api/admin/users/:id/reactivate", min: "admin" },
+  { route: "POST /api/admin/users/:id/revoke-access", min: "admin" },
+  { route: "PUT /api/admin/tools/:id", min: "admin" },
+  { route: "POST /api/admin/tools/reorder", min: "admin" },
+  { route: "DELETE /api/admin/tools/:id", min: "admin" },
+  { route: "PUT /api/admin/users/:id/role", min: "super_admin" },
+  { route: "DELETE /api/admin/users/:id/role", min: "super_admin" },
+];
+for (const { route, min } of ADMIN_ROUTE_GATES) {
+  ok(`gating: ${route} allows ${min}`, hasMinRole(min, min) === true);
+  ok(`gating: ${route} allows super_admin`, hasMinRole("super_admin", min) === true);
+  ok(`gating: ${route} rejects non-admin identity`, hasMinRole(null, min) === false);
+  ok(`gating: ${route} rejects unknown role`, hasMinRole("owner", min) === false);
+  if (min !== "moderator") ok(`gating: ${route} rejects moderator (read-only)`, hasMinRole("moderator", min) === false);
+  if (min === "super_admin") ok(`gating: ${route} rejects admin`, hasMinRole("admin", min) === false);
+}
+
 ok("missing administrator record rejected", () => assert.equal(isActiveAdminRecord(null), false));
 
 /* ---------------- error mapping ---------------- */
