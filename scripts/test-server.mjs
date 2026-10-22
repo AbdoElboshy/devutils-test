@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import {
   ANALYTICS_EVENTS,
   isAllowedOrigin,
-  isActiveAdminRecord,
+  activeAdminRole, hasMinRole, isActiveAdminRecord,
   isCsrfValid,
   toToolOverrideDbRow,
   mergeToolRegistry,
@@ -284,7 +284,44 @@ ok("allowlist matches documented events", () => assert.equal(ANALYTICS_EVENTS.in
 /* ---------------- administrator authorization record ---------------- */
 ok("active administrator record accepted", () => assert.equal(isActiveAdminRecord({ role: "admin", revoked_at: null }), true));
 ok("revoked administrator record rejected", () => assert.equal(isActiveAdminRecord({ role: "admin", revoked_at: "2026-10-19T12:00:00.000Z" }), false));
-ok("non-admin role rejected", () => assert.equal(isActiveAdminRecord({ role: "moderator", revoked_at: null }), false));
+ok("moderator is an active admin-tier record (phase6)", () => assert.equal(isActiveAdminRecord({ role: "moderator", revoked_at: null }), true));
+ok("super_admin is an active admin-tier record (phase6)", () => assert.equal(isActiveAdminRecord({ role: "super_admin", revoked_at: null }), true));
+ok("unknown role rejected (phase6)", () => assert.equal(isActiveAdminRecord({ role: "owner", revoked_at: null }), false));
+ok("activeAdminRole resolves moderator (phase6)", () => assert.equal(activeAdminRole({ role: "moderator", revoked_at: null }), "moderator"));
+ok("activeAdminRole resolves super_admin (phase6)", () => assert.equal(activeAdminRole({ role: "super_admin", revoked_at: null }), "super_admin"));
+ok("activeAdminRole null for revoked (phase6)", () => assert.equal(activeAdminRole({ role: "admin", revoked_at: "2026-10-19T12:00:00.000Z" }), null));
+ok("hasMinRole moderator below admin (phase6)", () => assert.equal(hasMinRole("moderator", "admin"), false));
+ok("hasMinRole admin meets admin (phase6)", () => assert.equal(hasMinRole("admin", "admin"), true));
+ok("hasMinRole super_admin meets admin (phase6)", () => assert.equal(hasMinRole("super_admin", "admin"), true));
+ok("hasMinRole admin below super_admin (phase6)", () => assert.equal(hasMinRole("admin", "super_admin"), false));
+ok("hasMinRole unknown role never passes (phase6)", () => assert.equal(hasMinRole("owner", "moderator"), false));
+
+/* ---------------- phase6: admin route gating matrix ---------------- */
+/* Every /api/admin route and its minimum tier, pinned via hasMinRole so a
+   future edit cannot silently widen a gate. Server middleware (requireRole)
+   is the enforcement; this matrix is its characterization test. */
+const ADMIN_ROUTE_GATES = [
+  { route: "base /api/admin middleware", min: "moderator" },
+  { route: "GET /api/admin/me", min: "moderator" },
+  { route: "GET /api/admin/users", min: "admin" },
+  { route: "POST /api/admin/users/:id/suspend", min: "admin" },
+  { route: "POST /api/admin/users/:id/reactivate", min: "admin" },
+  { route: "POST /api/admin/users/:id/revoke-access", min: "admin" },
+  { route: "PUT /api/admin/tools/:id", min: "admin" },
+  { route: "POST /api/admin/tools/reorder", min: "admin" },
+  { route: "DELETE /api/admin/tools/:id", min: "admin" },
+  { route: "PUT /api/admin/users/:id/role", min: "super_admin" },
+  { route: "DELETE /api/admin/users/:id/role", min: "super_admin" },
+];
+for (const { route, min } of ADMIN_ROUTE_GATES) {
+  ok(`gating: ${route} allows ${min} (minimum tier)`, () => assert.equal(hasMinRole(min, min), true));
+  ok(`gating: ${route} allows super_admin`, () => assert.equal(hasMinRole("super_admin", min), true));
+  ok(`gating: ${route} rejects non-admin identity`, () => assert.equal(hasMinRole(null, min), false));
+  ok(`gating: ${route} rejects unknown role`, () => assert.equal(hasMinRole("owner", min), false));
+  if (min !== "moderator") ok(`gating: ${route} rejects moderator (read-only)`, () => assert.equal(hasMinRole("moderator", min), false));
+  if (min === "super_admin") ok(`gating: ${route} rejects admin`, () => assert.equal(hasMinRole("admin", min), false));
+}
+
 ok("missing administrator record rejected", () => assert.equal(isActiveAdminRecord(null), false));
 
 /* ---------------- error mapping ---------------- */

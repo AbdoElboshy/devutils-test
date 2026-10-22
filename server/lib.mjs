@@ -334,7 +334,22 @@ export function toToolOverrideDbRow(override, updatedBy, updatedAt) {
 /** A cached administrator record is active only while its role is still
  * explicitly granted and its revocation timestamp is absent. */
 export function isActiveAdminRecord(record) {
-  return Boolean(record && record.role === "admin" && !record.revoked_at);
+  return activeAdminRole(record) !== null;
+}
+
+/** Admin tiers, ordered: moderator < admin < super_admin. */
+export const ADMIN_ROLE_RANK = { moderator: 1, admin: 2, super_admin: 3 };
+
+/** Resolve the active role of an admin_users row, or null for none/revoked. */
+export function activeAdminRole(record) {
+  if (!record || record.revoked_at) return null;
+  return ADMIN_ROLE_RANK[record.role] ? record.role : null;
+}
+
+/** True when `role` meets the `min` tier. Unknown tiers never pass. */
+export function hasMinRole(role, min) {
+  const r = ADMIN_ROLE_RANK[role] ?? 0;
+  return r > 0 && r >= (ADMIN_ROLE_RANK[min] ?? 99);
 }
 
 /* ------------------------------------------------------------------ *

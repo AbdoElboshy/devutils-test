@@ -29,6 +29,8 @@ import {
   validateServerConfig,
   validateToolOverride,
   isAllowedOrigin,
+  activeAdminRole,
+  hasMinRole,
   isActiveAdminRecord,
   toToolOverrideDbRow,
 } from "./lib.mjs";
@@ -185,23 +187,33 @@ function sendError(res, error, fallback = "Request failed.") {
  * ------------------------------------------------------------------ */
 
 const adminCache = new Map();
-async function isAdmin(userId) {
+async function adminRoleOf(userId) {
   const cached = adminCache.get(userId);
-  if (cached && cached.expires > Date.now()) return cached.value;
+  if (cached && cached.expires > Date.now()) return cached.role ?? (cached.value ? "admin" : null);
   const { data, error } = await service.from("admin_users").select("user_id,role,revoked_at").eq("user_id", userId).maybeSingle();
   if (error) throw error;
-  const value = isActiveAdminRecord(data);
-  adminCache.set(userId, { value, expires: Date.now() + 30_000 });
-  return value;
+  const role = activeAdminRole(data);
+  adminCache.set(userId, { role, expires: Date.now() + 30_000 });
+  return role;
+}
+async function isAdmin(userId) {
+  return (await adminRoleOf(userId)) !== null;
+}
+function requireRole(min = "moderator") {
+  return async (req, res, next) => {
+    try {
+      const role = await adminRoleOf(req.devutils.user.id);
+      if (!role || !hasMinRole(role, min)) return res.status(403).json({ error: "Administrator access required." });
+      req.devutils.isAdmin = true;
+      req.devutils.adminRole = role;
+      next();
+    } catch (error) {
+      sendError(res, error, "Administrator check failed.");
+    }
+  };
 }
 async function requireAdmin(req, res, next) {
-  try {
-    if (!(await isAdmin(req.devutils.user.id))) return res.status(403).json({ error: "Administrator access required." });
-    req.devutils.isAdmin = true;
-    next();
-  } catch (error) {
-    sendError(res, error, "Administrator check failed.");
-  }
+  await requireRole("admin")(req, res, next);
 }
 async function audit(userId, action, metadata = {}) {
   try {
@@ -723,9 +735,9 @@ app.post("/api/analytics/events", analyticsLimit, requireOrigin, requireCsrf, as
  * Administration — Tools Management, categories, analytics, audit
  * ------------------------------------------------------------------ */
 
-app.use("/api/admin", adminLimit, requireOrigin, requireCsrf, requireSession, requireAdmin);
+app.use("/api/admin", adminLimit, requireOrigin, requireCsrf, requireSession, requireRole("moderator"));
 
-app.get("/api/admin/me", (req, res) => res.json({ role: "admin", userId: req.devutils.user.id, email: req.devutils.user.email }));
+app.get("/api/admin/me", (req, res) => res.json({ role: req.devutils.adminRole, userId: req.devutils.user.id, email: req.devutils.user.email }));
 
 app.get("/api/admin/registry", async (_req, res) => {
   try {
@@ -742,7 +754,7 @@ app.get("/api/admin/registry", async (_req, res) => {
   }
 });
 
-app.put("/api/admin/tools/:id", async (req, res) => {
+app.put("/api/admin/tools/:id", requireRole("admin"), async (req, res) => {
   const id = String(req.params.id).slice(0, 64);
   try {
     const overrides = await loadOverrides();
@@ -770,7 +782,7 @@ app.put("/api/admin/tools/:id", async (req, res) => {
   }
 });
 
-app.post("/api/admin/tools/reorder", async (req, res) => {
+app.post("/api/admin/tools/reorder", requireRole("admin"), async (req, res) => {
   const order = Array.isArray(req.body?.order) ? req.body.order.slice(0, 500) : [];
   const known = new Set(baseRegistry.tools.map((tool) => tool.id));
   const invalid = order.filter((entry) => !entry || typeof entry !== "object" || !known.has(String(entry.id)));
@@ -792,7 +804,7 @@ app.post("/api/admin/tools/reorder", async (req, res) => {
   }
 });
 
-app.delete("/api/admin/tools/:id", async (req, res) => {
+app.delete("/api/admin/tools/:id", requireRole("admin"), async (req, res) => {
   const id = String(req.params.id).slice(0, 64);
   const r = await service.from("tool_overrides").delete().eq("id", id);
   if (r.error) return sendError(res, r.error, "Reset failed.");
@@ -801,7 +813,7 @@ app.delete("/api/admin/tools/:id", async (req, res) => {
   res.json({ ok: true });
 });
 
-app.put("/api/admin/categories/:id", async (req, res) => {
+app.put("/api/admin/categories/:id", requireRole("admin"), async (req, res) => {
   const id = String(req.params.id).slice(0, 40);
   if (!baseRegistry.categories.some((category) => category.id === id)) {
     return res.status(400).json({ error: "Category is not registered in this build." });
@@ -824,7 +836,7 @@ app.get("/api/admin/export", async (_req, res) => {
   }
 });
 
-app.post("/api/admin/import", async (req, res) => {
+app.post("/api/admin/import", requireRole("admin"), async (req, res) => {
   const result = validateRegistryImport(req.body, baseRegistry.tools, baseRegistry.categories);
   if (!result.ok) return res.status(400).json({ errors: result.errors });
   const toolCount = result.value.tools.length;
@@ -929,6 +941,137 @@ app.get("/api/admin/health", async (_req, res) => {
   }
   const ok = Object.values(checks).every((check) => check.ok);
   res.status(ok ? 200 : 503).json({ status: ok ? "ok" : "degraded", checks, migrationRequired: !checks.tool_overrides.ok || !checks.admin_users.ok || !checks.analytics_events.ok });
+});
+
+/* ------------------------------------------------------------------ *
+ * Phase 6 — user management (WS B)
+ * ------------------------------------------------------------------ */
+
+const AUTH_BAN_INDEFINITE = "876000h"; // 100 years: treated as an indefinite ban.
+
+async function loadActiveAdminRoles() {
+  const r = await service.from("admin_users").select("user_id,role,revoked_at");
+  if (r.error) throw r.error;
+  const map = new Map();
+  for (const row of r.data ?? []) if (!row.revoked_at) map.set(row.user_id, row.role);
+  return map;
+}
+
+app.get("/api/admin/users", requireRole("admin"), async (req, res) => {
+  try {
+    const query = String(req.query.query ?? "").trim().toLowerCase().slice(0, 100);
+    const status = String(req.query.status ?? "all"); // all | active | suspended
+    const page = Math.max(1, Math.min(50, Number(req.query.page ?? 1) || 1));
+    const pageSize = Math.max(10, Math.min(100, Number(req.query.pageSize ?? 25) || 25));
+    const roles = await loadActiveAdminRoles();
+    // Bounded fan-out: at most 5 pages x 100 users covers current platform scale.
+    const all = [];
+    let total = 0;
+    for (let p = 1; p <= 5; p += 1) {
+      const { data, error } = await service.auth.admin.listUsers({ page: p, perPage: 100 });
+      if (error) return sendError(res, error, "User listing unavailable.");
+      const users = data?.users ?? [];
+      total = data?.total ?? all.length;
+      all.push(...users);
+      if (users.length < 100) break;
+    }
+    let users = all.map((u) => ({
+      id: u.id,
+      email: u.email ?? null,
+      createdAt: u.created_at,
+      lastSignInAt: u.last_sign_in_at ?? null,
+      bannedUntil: u.banned_until ?? null,
+      suspended: Boolean(u.banned_until && new Date(u.banned_until) > new Date()),
+      role: roles.get(u.id) ?? null,
+    }));
+    if (query) users = users.filter((u) => (u.email ?? "").toLowerCase().includes(query) || u.id.toLowerCase().includes(query));
+    if (status === "suspended") users = users.filter((u) => u.suspended);
+    if (status === "active") users = users.filter((u) => !u.suspended);
+    const filtered = users.length;
+    const start = (page - 1) * pageSize;
+    res.json({ users: users.slice(start, start + pageSize), total: filtered, authTotal: total, page, pageSize });
+  } catch (error) {
+    sendError(res, error, "User listing unavailable.");
+  }
+});
+
+app.post("/api/admin/users/:id/suspend", requireRole("admin"), async (req, res) => {
+  const id = String(req.params.id);
+  try {
+    if (id === req.devutils.user.id) return res.status(400).json({ error: "You cannot suspend your own account." });
+    const targetRole = await adminRoleOf(id);
+    if (targetRole === "super_admin" && req.devutils.adminRole !== "super_admin") {
+      return res.status(403).json({ error: "Only a super-administrator can suspend another administrator." });
+    }
+    const { error } = await service.auth.admin.updateUserById(id, { ban_duration: AUTH_BAN_INDEFINITE });
+    if (error) return sendError(res, error, "Suspension failed.");
+    adminCache.delete(id);
+    if (!(await recordAdminAuditOrRespond(res, req.devutils.user.id, "user_suspended", { target_user_id: id }))) return;
+    res.json({ ok: true });
+  } catch (error) {
+    sendError(res, error, "Suspension failed.");
+  }
+});
+
+app.post("/api/admin/users/:id/reactivate", requireRole("admin"), async (req, res) => {
+  const id = String(req.params.id);
+  try {
+    if (id === req.devutils.user.id) return res.status(400).json({ error: "You cannot reactivate your own account." });
+    const { error } = await service.auth.admin.updateUserById(id, { ban_duration: "none" });
+    if (error) return sendError(res, error, "Reactivation failed.");
+    if (!(await recordAdminAuditOrRespond(res, req.devutils.user.id, "user_reactivated", { target_user_id: id }))) return;
+    res.json({ ok: true });
+  } catch (error) {
+    sendError(res, error, "Reactivation failed.");
+  }
+});
+
+app.post("/api/admin/users/:id/revoke-access", requireRole("admin"), async (req, res) => {
+  const id = String(req.params.id);
+  try {
+    if (id === req.devutils.user.id) return res.status(400).json({ error: "You cannot revoke your own access." });
+    const targetRole = await adminRoleOf(id);
+    if (targetRole === "super_admin" && req.devutils.adminRole !== "super_admin") {
+      return res.status(403).json({ error: "Only a super-administrator can revoke another administrator's access." });
+    }
+    const { error } = await service.auth.admin.signOut(id);
+    if (error) return sendError(res, error, "Access revocation failed.");
+    adminCache.delete(id);
+    if (!(await recordAdminAuditOrRespond(res, req.devutils.user.id, "user_access_revoked", { target_user_id: id }))) return;
+    res.json({ ok: true });
+  } catch (error) {
+    sendError(res, error, "Access revocation failed.");
+  }
+});
+
+app.put("/api/admin/users/:id/role", requireRole("super_admin"), async (req, res) => {
+  const id = String(req.params.id);
+  const role = String(req.body?.role ?? "");
+  try {
+    if (id === req.devutils.user.id) return res.status(400).json({ error: "You cannot change your own role." });
+    if (!["moderator", "admin", "super_admin"].includes(role)) return res.status(400).json({ error: "role must be moderator, admin, or super_admin." });
+    const { error } = await service.rpc("set_admin_role", { p_user_id: id, p_role: role, p_set_by: req.devutils.user.id });
+    if (error) return sendError(res, error, "Role assignment failed.");
+    adminCache.delete(id);
+    if (!(await recordAdminAuditOrRespond(res, req.devutils.user.id, "admin_role_assigned", { target_user_id: id, role }))) return;
+    res.json({ ok: true });
+  } catch (error) {
+    sendError(res, error, "Role assignment failed.");
+  }
+});
+
+app.delete("/api/admin/users/:id/role", requireRole("super_admin"), async (req, res) => {
+  const id = String(req.params.id);
+  try {
+    if (id === req.devutils.user.id) return res.status(400).json({ error: "You cannot revoke your own role." });
+    const { error } = await service.rpc("revoke_admin", { p_user_id: id });
+    if (error) return sendError(res, error, "Role revocation failed.");
+    adminCache.delete(id);
+    if (!(await recordAdminAuditOrRespond(res, req.devutils.user.id, "admin_role_revoked", { target_user_id: id }))) return;
+    res.json({ ok: true });
+  } catch (error) {
+    sendError(res, error, "Role revocation failed.");
+  }
 });
 
 app.use("/api", (_req, res) => res.status(404).json({ error: "API route not found." }));
