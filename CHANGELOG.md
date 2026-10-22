@@ -154,3 +154,70 @@ Base commit: `4233b469dad3de746fb0b53a71a0630ec8ba8c7d` (tag `pre-repair-baselin
 - Admin mutations report a clear post-write audit failure instead of silently claiming full success.
 - Added regression tests and the AI/project status/manifest documentation.
 - This candidate has not been deployed and still requires dependency installation, full TypeScript/build verification, and Supabase staging checks.
+
+## 2026-10-21/22 — Phase 5: pinned tools, collections, account personalization
+
+Branch: `phase5/accounts`
+
+### ADDED
+
+- `supabase/migrations/202610210001_pinned_tools_collections.sql` — `pinned_tools`,
+  `collections`, `collection_items` with per-user RLS (12 policies), check
+  constraints, and least-privilege grants.
+- `src/platform/models.ts` / `contracts.ts` — `PinnedTool`, `Collection`,
+  `CollectionItem` types and the `PinnedToolsRepository` /
+  `CollectionsRepository` interfaces (single-call `reorder`, `update` patch,
+  `items()` per collection).
+- `src/platform/local-repositories.ts` / `adaptive-repositories.ts` /
+  `http-repositories.ts` — local, adaptive, and HTTP repositories for both
+  features; cloud bindings wired in `src/platform/index.ts` (anonymous work
+  stays local, signed-in work routes to the user's cloud rows, scope changes
+  hand off via `setUserScope`).
+- `server/index.mjs` — 9 pinned-tools + 8 collections endpoints under
+  `/api/account`, with validation helpers in `server/lib.mjs`
+  (`safePinnedToolIds`, `validateCollectionInput`, `safeCollectionItemInput`).
+- `src/pages/account.tsx` — dashboard Pinned tools panel (pin via picker,
+  reorder up/down, unpin); Collections section (create, delete, add/remove
+  items); Data portability panel (JSON export + import with per-record
+  validation and duplicate skipping). Security is consolidated into Settings;
+  `/account/security` URLs still route so no bookmark breaks.
+- `src/App.tsx` / `src/components/ui.tsx` — `usePinned` hook, Pinned chip row
+  on Home (above Recent), pin toggle beside the favorite star on tool cards.
+- `scripts/verify.ts` — 14 assertions covering the local repositories and
+  two-user isolation through the adaptive layer (scope hand-off, routing
+  flips, subscriber sequence proves no cross-user cache bleed); 2 route
+  assertions for the new account sections.
+
+### UPDATED
+
+- `src/lib/routes.ts` — `"collections"` added to `ACCOUNT_SECTIONS`.
+
+### DATABASE AND CONFIGURATION
+
+- Migrations required: **yes** — `202610210001_pinned_tools_collections.sql`
+  followed by `202610220001_restore_account_table_grants.sql` (hotfix, see below).
+- Incident: `202610210001` followed the platform migration's style with a
+  schema-wide `revoke all on all tables in schema public from anon,
+  authenticated;` but re-granted only the three new tables, silently removing
+  the `authenticated` grants on every pre-existing account table. Test and
+  production share one Supabase project, so both began failing all
+  `/api/account` requests once the account page was next opened. The unit and
+  server gates stayed green throughout because they never touch the live
+  database. `202610220001` restores exactly the grants `202609200001` created
+  (nothing new, no column widening, nothing for `anon`); applied 2026-10-22
+  and verified with `has_table_privilege` — all user tables restored, admin/
+  override tables intentionally ungranted.
+- Checklist change going forward: any migration containing a schema-wide
+  REVOKE must be followed in the same file by explicit re-grants of every
+  table the affected roles need, and a post-apply privilege check
+  (`has_table_privilege`) is now part of the migration checklist.
+
+### TESTS
+
+- `npx tsc --noEmit` — clean.
+- `npx tsx scripts/verify.ts` — 247 passed, 0 failed.
+- `npm run build` — success (944.54 kB, 275.16 kB gzip).
+- `npm run test:server` — 90 passed, 0 failed.
+- Known failures: none. The live two-user browser spot-check (pin/reorder,
+  collection CRUD, export/import round-trip, cross-user isolation) is the
+  remaining acceptance step before merge.
