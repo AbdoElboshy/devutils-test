@@ -1067,8 +1067,10 @@ app.post("/api/admin/users/:id/revoke-access", requireRole("admin"), async (req,
     if (targetRole === "super_admin" && req.devutils.adminRole !== "super_admin") {
       return res.status(403).json({ error: "Only a super-administrator can revoke another administrator's access." });
     }
-    const { error } = await service.auth.admin.signOutById(id);
-    if (error) return sendError(res, error, "Access revocation failed.");
+    // supabase-js does not expose an admin signOutById; call the GoTrue admin endpoint directly.
+    const signOutUrl = `${process.env.SUPABASE_URL.replace(/\/$/, "")}/auth/v1/admin/users/${encodeURIComponent(id)}/sign_out`;
+    const signOutResp = await fetch(signOutUrl, { method: "POST", headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` } });
+    if (!signOutResp.ok) return res.status(502).json({ error: "Access revocation failed." });
     adminCache.delete(id);
     if (!(await recordAdminAuditOrRespond(res, req.devutils.user.id, "user_access_revoked", { target_user_id: id }))) return;
     res.json({ ok: true });
