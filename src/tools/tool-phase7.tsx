@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   phpSerialize, phpUnserialize, htmlToJsx, colorFormats,
-  markdownToHtml, genUlid, validateUlid, convertBase,
+  markdownToHtml, genUlid, validateUlid, convertBase, type ColorReport,
 } from "../lib/phase7-engine";
 import { TOOL_MAP } from "../lib/registry";
 import {
@@ -42,7 +42,7 @@ export function PhpSerializeTool() {
           <Split
             left={<CodeArea label={`Input · ${mode === "j2p" ? "JSON" : "PHP serialize()"}`} value={input} onChange={setInput} rows={12} accept=".txt,.json,.php" onFile={(t) => setInput(t)} />}
             right={!res.ok
-              ? <ErrorCallout title="Cannot convert" message={res.err} hint="PHP data looks like a:2:{s:4:\"name\";s:4:\"Maya\";} — check the type letters, lengths and braces." />
+              ? <ErrorCallout title="Cannot convert" message={res.err} hint={'PHP data looks like a:2:{s:4:"name";s:4:"Maya";} — check the type letters, lengths and braces.'} />
               : <OutputBox value={res.out} label={`Output · ${mode === "j2p" ? "PHP serialize()" : "JSON"}`} filename={mode === "j2p" ? "data.php.txt" : "data.json"} rows={12} />}
           />
         </div>
@@ -96,10 +96,10 @@ export function HtmlToJsxTool() {
 export function ColorConvertTool() {
   const tool = TOOL_MAP.color;
   const [input, setInput] = useState("#3366ff");
-  const res = useMemo(() => {
-    if (!input.trim()) return { ok: true as const };
-    try { return { ok: true as const, v: colorFormats(input) }; }
-    catch (e) { return { ok: false as const, err: (e as Error).message }; }
+  const res = useMemo<{ ok: true; v: ColorReport | null } | { ok: false; err: string }>(() => {
+    if (!input.trim()) return { ok: true, v: null };
+    try { return { ok: true, v: colorFormats(input) }; }
+    catch (e) { return { ok: false, err: (e as Error).message }; }
   }, [input]);
 
   return (
@@ -109,7 +109,7 @@ export function ColorConvertTool() {
           <Field label="Color" hint="#hex, rgb(...) or hsl(...)" className="min-w-[220px] flex-1">
             <TextInput value={input} onChange={(e) => setInput(e.target.value)} className="font-mono" placeholder="#3366ff" />
           </Field>
-          {res.ok && "v" in res && (
+          {res.ok && res.v !== null && (
             <div className="flex items-center gap-3 pb-1">
               <div className="h-12 w-28 rounded-lg border border-zinc-300 dark:border-zinc-700" style={{ backgroundColor: res.v.hex }} aria-label="Color preview" />
               <span className="text-[12px] text-zinc-500">Best text: <b className="text-zinc-900 dark:text-zinc-100">{res.v.textOn}</b></span>
@@ -119,7 +119,7 @@ export function ColorConvertTool() {
         <div className="mt-3">
           {!res.ok
             ? <ErrorCallout title="Invalid color" message={res.err} hint="Try #3366ff, rgb(51, 102, 255) or hsl(225, 100, 60)." />
-            : "v" in res && (
+            : res.v !== null && (
               <>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                   <Stat label="HEX" value={res.v.hex} />

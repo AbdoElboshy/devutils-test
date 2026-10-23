@@ -271,6 +271,7 @@ eq("AWS search", searchTools("aws arn", 20).some((hit) => hit.tool.id === "aws-a
     "chmod", "linux-cmd", "ssh", "systemd", "subnet", "ip", "dns", "http", "curl", "ports",
     "jwt", "hash", "secrets", "websec", "cert", "encode", "qr", "converter", "sql",
     "text", "timestamp", "timezone", "datecalc",
+    "php-serialize", "html-to-jsx", "color", "markdown", "ulid", "base-convert",
   ]);
   const hasComponent = (id: string): boolean => {
     if (id.startsWith("aws-") || id.startsWith("azure-") || id.startsWith("gcp-") || id.startsWith("gcloud-") || id === "cloud-cidr-planner" || id === "cloud-cli-converter") return true;
