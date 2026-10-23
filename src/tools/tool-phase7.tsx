@@ -109,6 +109,15 @@ export function ColorConvertTool() {
           <Field label="Color" hint="#hex, rgb(...) or hsl(...)" className="min-w-[220px] flex-1">
             <TextInput value={input} onChange={(e) => setInput(e.target.value)} className="font-mono" placeholder="#3366ff" />
           </Field>
+          <Field label="Pick visually">
+            <input
+              type="color"
+              value={res.ok && res.v !== null ? res.v.hex : "#3366ff"}
+              onChange={(e) => setInput(e.target.value)}
+              aria-label="Pick a color visually"
+              className="h-10 w-14 cursor-pointer rounded-lg border border-zinc-300 bg-transparent p-1 dark:border-zinc-700"
+            />
+          </Field>
           {res.ok && res.v !== null && (
             <div className="flex items-center gap-3 pb-1">
               <div className="h-12 w-28 rounded-lg border border-zinc-300 dark:border-zinc-700" style={{ backgroundColor: res.v.hex }} aria-label="Color preview" />
