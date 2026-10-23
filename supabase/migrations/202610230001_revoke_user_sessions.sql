@@ -12,7 +12,7 @@ begin
              where table_schema = 'auth' and table_name = 'sessions') then
     execute 'delete from auth.sessions where user_id = $1' using p_user_id;
   end if;
-  delete from auth.refresh_tokens where user_id = p_user_id and revoked = false;
+  delete from auth.refresh_tokens where user_id::text = p_user_id::text and revoked = false;
 end;
 $$;
 
