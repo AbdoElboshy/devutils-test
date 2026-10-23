@@ -1511,6 +1511,158 @@ export function minifySql(input: string): string {
   return sql.replace(/__LIT(\d+)__/g, (_, n: string) => literals[+n]);
 }
 
+/* ===== SQL SAMPLE DATA (phase7) — pure generator, never executes SQL ===== */
+
+function hashSeedStr(s: string): number {
+  let h = 1779033703 ^ s.length;
+  for (let i = 0; i < s.length; i++) {
+    h = Math.imul(h ^ s.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
+function seededRng(seed: string): () => number {
+  let a = hashSeedStr(seed);
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+type SampleCol = { name: string; kind: string; nullable: boolean; primary: boolean };
+
+function parseTableName(ddl: string): string {
+  const m = /\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?([^\s(]+)/i.exec(ddl);
+  if (!m) throw new Error("Could not find 'CREATE TABLE <name> (...)' — paste a full CREATE TABLE statement.");
+  return m[1].replace(/["`\[\]]/g, "");
+}
+
+function splitTopLevel(body: string): string[] {
+  const parts: string[] = [];
+  let depth = 0, quote = "", cur = "";
+  for (const ch of body) {
+    if (quote) { cur += ch; if (ch === quote) quote = ""; continue; }
+    if (ch === '"' || ch === "'" || ch === "`") { quote = ch; cur += ch; continue; }
+    if (ch === "(") depth++;
+    else if (ch === ")") depth--;
+    if (ch === "," && depth === 0) { parts.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  parts.push(cur);
+  return parts;
+}
+
+function parseTableColumns(ddl: string): SampleCol[] {
+  const open = ddl.indexOf("(");
+  if (open < 0) throw new Error("CREATE TABLE has no '(...)' — expected column definitions.");
+  let depth = 0, quote = "", end = -1;
+  for (let i = open; i < ddl.length; i++) {
+    const ch = ddl[i];
+    if (quote) { if (ch === quote) quote = ""; continue; }
+    if (ch === '"' || ch === "'" || ch === "`") { quote = ch; continue; }
+    if (ch === "(") depth++;
+    else if (ch === ")") { depth--; if (depth === 0) { end = i; break; } }
+  }
+  if (end < 0) throw new Error("Unbalanced parentheses in CREATE TABLE.");
+  const cols: SampleCol[] = [];
+  for (const raw of splitTopLevel(ddl.slice(open + 1, end))) {
+    const part = raw.trim();
+    if (!part) continue;
+    if (/^(primary\s+key|foreign\s+key|unique\b|check\b|constraint\b|key\b|index\b|exclude\b|period\b|like\b)/i.test(part)) continue;
+    const nm = /^\s*(?:"([^"]+)"|`([^`]+)`|\[([^\]]+)\]|([A-Za-z_$][\w$]*))\s+([\s\S]+)$/.exec(part);
+    if (!nm) continue;
+    const name = nm[1] || nm[2] || nm[3] || nm[4] || "";
+    const def = (nm[5] || "").toLowerCase();
+    cols.push({ name, kind: sampleColKind(def), nullable: !/\bnot\s+null\b/.test(def), primary: /\bprimary\s+key\b/.test(def) });
+  }
+  return cols;
+}
+
+function sampleColKind(def: string): string {
+  if (/\buuid\b/.test(def)) return "uuid";
+  if (/\bjsonb?\b/.test(def)) return "json";
+  if (/\btimestamptz\b|\btimestamp\b|\bdatetime\b/.test(def)) return "ts";
+  if (/\bboolean\b|\bbool\b|\bbit\b/.test(def)) return "bool";
+  if (/\bdate\b/.test(def)) return "date";
+  if (/\binteger\b|\bbigint\b|\bsmallint\b|\btinyint\b|\bserial\b|\bidentity\b|\bint\b/.test(def)) return "int";
+  if (/\bnumeric\b|\bdecimal\b|\bmoney\b|\bfloat\b|\bdouble\b|\breal\b/.test(def)) return "real";
+  return "text";
+}
+
+const SAMPLE_FIRST = ["maya", "liam", "noah", "emma", "olivia", "aiden", "sofia", "kai"];
+const SAMPLE_LAST = ["chen", "patel", "reyes", "kova", "adler", "nolan", "ibrahim", "ross"];
+const SAMPLE_CITY = ["london", "cairo", "berlin", "tokyo", "perth", "delhi", "oslo", "lagos"];
+
+function sampleHex(rng: () => number, n: number): string {
+  let out = "";
+  for (let i = 0; i < n; i++) out += "0123456789abcdef"[Math.floor(rng() * 16)];
+  return out;
+}
+
+function sampleIsoDay(i: number): string {
+  return new Date(Date.UTC(2026, 9, 1) + i * 86400000).toISOString().slice(0, 10);
+}
+
+function sampleTextFor(name: string, i: number, rng: () => number): string {
+  const n = name.toLowerCase();
+  if (/email/.test(n)) return SAMPLE_FIRST[i % 8] + (i + 1) + "@example.com";
+  if (/first_?name/.test(n)) return SAMPLE_FIRST[i % 8];
+  if (/last_?name|surname/.test(n)) return SAMPLE_LAST[i % 8];
+  if (/(^|_)name$/.test(n) && !/user|file|host|table/.test(n)) return SAMPLE_FIRST[i % 8] + " " + SAMPLE_LAST[i % 8];
+  if (/user(name)?|handle|login|account/.test(n)) return SAMPLE_FIRST[i % 8] + (i + 1);
+  if (/phone|mobile|(^|_)tel$/.test(n)) return "+1555" + String(1000000 + i * 137).slice(1);
+  if (/city/.test(n)) return SAMPLE_CITY[i % 8];
+  if (/country/.test(n)) return ["egypt", "india", "germany", "japan", "brazil", "kenya", "norway", "spain"][i % 8];
+  if (/state|province/.test(n)) return ["north", "south", "east", "west", "central"][i % 5];
+  if (/zip|postal/.test(n)) return String(10000 + i * 97);
+  if (/url|website|link|domain/.test(n)) return "https://example.com/page/" + (i + 1);
+  if (/token|hash|secret|api_?key|slug/.test(n)) return sampleHex(rng, 32);
+  if (/status/.test(n)) return ["active", "pending", "archived"][i % 3];
+  if (/title|label/.test(n)) return "Sample " + (i + 1);
+  if (/desc|notes|comment|bio|body|message/.test(n)) return "Sample " + SAMPLE_FIRST[i % 8] + " record " + (i + 1);
+  return n.replace(/^is_?/, "").replace(/_at$|_id$/g, "") + "_" + (i + 1);
+}
+
+function sampleValueFor(c: SampleCol, i: number, rng: () => number, dialect: string): string {
+  if (c.nullable && !c.primary && rng() < 0.1) return "NULL";
+  const q = (v: string) => "'" + v.split("'").join("''") + "'";
+  switch (c.kind) {
+    case "int": return String(i + 1);
+    case "real": return (Math.round(rng() * 1000000) / 100).toFixed(2);
+    case "bool": return dialect === "SQL Server" ? (rng() < 0.5 ? "1" : "0") : (rng() < 0.5 ? "true" : "false");
+    case "date": return q(sampleIsoDay(i));
+    case "ts": return q(sampleIsoDay(i) + " " + String(Math.floor(rng() * 24)).padStart(2, "0") + ":15:30");
+    case "json": return q('{"id": ' + (i + 1) + ', "active": true}');
+    case "uuid": return q(sampleHex(rng, 8) + "-" + sampleHex(rng, 4) + "-4" + sampleHex(rng, 3) + "-8" + sampleHex(rng, 3) + "-" + sampleHex(rng, 12));
+    default: return q(sampleTextFor(c.name, i, rng));
+  }
+}
+
+function sampleQuoteIdent(name: string, dialect: string): string {
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return name;
+  if (dialect === "MySQL") return "`" + name + "`";
+  if (dialect === "SQL Server") return "[" + name + "]";
+  return '"' + name + '"';
+}
+
+export function genSqlSampleData(ddl: string, dialect: string, rowCount: number, seed: string): string {
+  if (!ddl.trim()) throw new Error("Paste a CREATE TABLE statement first.");
+  const cols = parseTableColumns(ddl);
+  if (!cols.length) throw new Error("No columns found — expected column definitions inside CREATE TABLE ( ... ).");
+  const rc = Math.floor(Number(rowCount));
+  const n = Math.max(1, Math.min(Number.isFinite(rc) ? rc : 10, 500));
+  const rng = seededRng(seed.trim() || "devutils");
+  const table = parseTableName(ddl);
+  const rows: string[] = [];
+  for (let i = 0; i < n; i++) {
+    rows.push("  (" + cols.map((c) => sampleValueFor(c, i, rng, dialect)).join(", ") + ")");
+  }
+  return "INSERT INTO " + sampleQuoteIdent(table, dialect) + " (" + cols.map((c) => sampleQuoteIdent(c.name, dialect)).join(", ") + ") VALUES\n" + rows.join(",\n") + ";";
+}
+
 /* ================= CODE FORMAT / MINIFY ================= */
 
 export function formatCode(lang: string, input: string): string {

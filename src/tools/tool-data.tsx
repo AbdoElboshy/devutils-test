@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   jsonToYaml, yamlToJson, jsonToCsv, csvToJson, jsonToXml, xmlToJson, jsonToToml, tomlToJson,
-  formatSql, minifySql, yamlParse, csvParse, diffLines, parseJsonError,
+  formatSql, minifySql, genSqlSampleData, yamlParse, csvParse, diffLines, parseJsonError,
 } from "../lib/engine";
 import { TOOL_MAP } from "../lib/registry";
 import {
@@ -118,6 +118,9 @@ export function SqlTool() {
   const [connDbName, setConnDbName] = useState("app");
   const [connUser, setConnUser] = useState("postgres");
   const [diffB, setDiffB] = useState("select id, name from users;");
+  const [sdInput, setSdInput] = useState("CREATE TABLE users (\n  id SERIAL PRIMARY KEY,\n  name TEXT NOT NULL,\n  email TEXT NOT NULL UNIQUE,\n  is_admin BOOLEAN DEFAULT false,\n  balance NUMERIC(10,2),\n  bio TEXT,\n  created_at TIMESTAMPTZ DEFAULT now()\n);");
+  const [sdRows, setSdRows] = useState("10");
+  const [sdSeed, setSdSeed] = useState("devutils");
 
   const res = useMemo(() => {
     try {
@@ -147,11 +150,14 @@ export function SqlTool() {
         };
         return { ok: true as const, out: urls[connDb] };
       }
+      if (tab === "sample") {
+        return { ok: true as const, out: genSqlSampleData(sdInput, dialect, Number(sdRows) || 10, sdSeed) };
+      }
       // diff
       const ops = diffLines(input, diffB);
       return { ok: true as const, out: ops.map((o) => `${o.type === "add" ? "+" : o.type === "del" ? "-" : " "} ${o.text}`).join("\n") };
     } catch (e) { return { ok: false as const, err: (e as Error).message }; }
-  }, [tab, input, dialect, tName, cols, insTable, insCols, insRows, selTable, selCols, selWhere, selLimit, connDb, connHost, connPort, connDbName, connUser, diffB]);
+  }, [tab, input, dialect, tName, cols, insTable, insCols, insRows, selTable, selCols, selWhere, selLimit, connDb, connHost, connPort, connDbName, connUser, sdInput, sdRows, sdSeed, diffB]);
 
   void dialect;
 
@@ -160,11 +166,11 @@ export function SqlTool() {
       <Panel className="p-4">
         <div className="flex flex-wrap items-end gap-2">
           <div className="flex flex-wrap gap-1 rounded-xl bg-zinc-100 p-1 dark:bg-zinc-900">
-            {[["format", "Format"], ["minify", "Minify"], ["create", "CREATE TABLE"], ["insert", "INSERT"], ["select", "SELECT"], ["conn", "Connection"], ["diff", "Diff"]].map(([id, label]) => (
+            {[["format", "Format"], ["minify", "Minify"], ["create", "CREATE TABLE"], ["insert", "INSERT"], ["select", "SELECT"], ["conn", "Connection"], ["sample", "Sample data"], ["diff", "Diff"]].map(([id, label]) => (
               <button key={id} type="button" onClick={() => setTab(id)} className={`rounded-lg px-3 py-1.5 text-[13px] font-medium ${tab === id ? "bg-white shadow-sm dark:bg-zinc-800" : "text-zinc-500"}`}>{label}</button>
             ))}
           </div>
-          {(tab === "format" || tab === "minify") && (
+          {(tab === "format" || tab === "minify" || tab === "sample") && (
             <Field label="Dialect"><Select value={dialect} onChange={(e) => setDialect(e.target.value as Dialect)} className="w-40">
               <option>PostgreSQL</option><option>MySQL</option><option>SQL Server</option><option>SQLite</option>
             </Select></Field>
@@ -218,6 +224,15 @@ export function SqlTool() {
               {!res.ok ? <ErrorCallout title="Error" message={res.err} /> : <OutputBox value={res.out} label="Connection string" filename="conn.txt" />}
               <p className="mt-2 text-[12px] text-zinc-500">Passwords are intentionally omitted — inject via env vars or a secrets manager.</p>
             </div>} />
+          )}
+          {tab === "sample" && (
+            <Split left={<div className="space-y-3">
+              <Field label="CREATE TABLE statement" hint="Paste DDL — table-level constraints are skipped"><textarea value={sdInput} onChange={(e) => setSdInput(e.target.value)} rows={9} className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 font-mono text-[13px] dark:border-zinc-700 dark:bg-zinc-900" /></Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Rows (1–500)"><TextInput value={sdRows} onChange={(e) => setSdRows(e.target.value)} className="font-mono" /></Field>
+                <Field label="Seed" hint="Same seed → same data"><TextInput value={sdSeed} onChange={(e) => setSdSeed(e.target.value)} className="font-mono" /></Field>
+              </div>
+            </div>} right={!res.ok ? <ErrorCallout title="Cannot generate" message={res.err} /> : <OutputBox value={res.out} label="Sample INSERT" filename="sample.sql" rows={12} />} />
           )}
           {tab === "diff" && (
             <Split left={<><CodeArea label="Query A" value={input} onChange={setInput} rows={8} /><div className="mt-3"><CodeArea label="Query B" value={diffB} onChange={setDiffB} rows={8} /></div></>}

@@ -7,7 +7,7 @@ reusing the existing Dialect selector), and 10 regression tests to
 scripts/verify.ts (expect 266 passed, 0 failed).
 
 Anchors verified against master 471892c:
-- engine.ts:  /* ===== CODE FORMAT / MINIFY ===== */  (x1, right after minifySql)
+- engine.ts:  /* ================= CODE FORMAT / MINIFY ================= */  (x1, right after minifySql)
 - tool-data.tsx: import line, diffB state, "// diff" fallthrough, deps array,
   tab-button array, dialect-selector condition, "{tab === \"diff\" && (" render
 - verify.ts: "formatSql, minifySql, explainRegex" import, "// --- G2: SQL format / minify ---"
@@ -186,7 +186,7 @@ export function genSqlSampleData(ddl: string, dialect: string, rowCount: number,
 }
 '''
 
-anchor = "/* ===== CODE FORMAT / MINIFY ===== */"
+anchor = "/* ================= CODE FORMAT / MINIFY ================= */"
 s = one(s, anchor, ENGINE_BLOCK + "\n" + anchor, 1)
 p.write_text(s, encoding="utf-8")
 print("engine.ts: genSqlSampleData() + helpers added")

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   formatJson, minifyJson, sortJson, flattenJson, unflattenJson, queryJsonPath, queryJsonPointer, applyJsonPatch, applyJsonMergePatch,
-  jsonToYaml, yamlToJson, jsonToCsv, csvToJson, jsonToToml, tomlToJson, jsonToSchema, formatSql, minifySql, explainRegex, jsonToXml, formatXml,
+  jsonToYaml, yamlToJson, jsonToCsv, csvToJson, jsonToToml, tomlToJson, jsonToSchema, formatSql, minifySql, genSqlSampleData, explainRegex, jsonToXml, formatXml,
   b64encode, b64decode, hexEncode, hexDecode, md5hex, sha1hex, sha3hex,
   decodeJwt, calcSubnet, splitSubnet, calcSupernet, numToSymbolic, symbolicToNum, umaskResult,
   parseTimestamp, describeCron, nextCronRuns, humanToCron, diffLines,
@@ -304,6 +304,28 @@ eq("AWS search", searchTools("aws arn", 20).some((hit) => hit.tool.id === "aws-a
   eq("curl php keeps content-type from --json", curlToPhp(r2).split("Content-Type").length - 1, 1);
   const eh = effectiveHeaders({ method: "POST", url: "https://x.dev", headers: [{ k: "content-type", v: "text/plain" }], auth: "", body: "", contentType: "text/plain" });
   eq("effectiveHeaders dedupes case-insensitively", eh.length, 1);
+}
+
+// --- G2: SQL sample data generator (phase7) ---
+{
+  const ddl = 'CREATE TABLE users (\n  id SERIAL PRIMARY KEY,\n  name TEXT NOT NULL,\n  email TEXT NOT NULL UNIQUE,\n  is_admin BOOLEAN DEFAULT false,\n  balance NUMERIC(10,2),\n  bio TEXT,\n  created_at TIMESTAMPTZ DEFAULT now()\n);';
+  const out = genSqlSampleData(ddl, "PostgreSQL", 12, "seed-a");
+  const lines = out.split("\n").filter((l) => l.trim().startsWith("("));
+  eq("sql sample row count", lines.length, 12);
+  eq("sql sample header", out.startsWith('INSERT INTO users (id, name, email, is_admin, balance, bio, created_at) VALUES'), true);
+  eq("sql sample unique emails", new Set(out.match(/[\w.]+@example\.com/g) ?? []).size, 12);
+  eq("sql sample sequential ids", lines[0].trim().startsWith("(1, ") && lines[11].trim().startsWith("(12, "), true);
+  eq("sql sample deterministic", genSqlSampleData(ddl, "PostgreSQL", 12, "seed-a") === out, true);
+  eq("sql sample seed changes data", genSqlSampleData(ddl, "PostgreSQL", 12, "seed-b") !== out, true);
+  const mssql = genSqlSampleData(ddl, "SQL Server", 8, "seed-a");
+  eq("sql sample mssql booleans", /true|false/.test(mssql) === false, true);
+  eq("sql sample not-null respected", lines.every((l) => /^\(\d+, '[^']+', '[^']+@example\.com', (true|false|NULL),/.test(l.trim())), true);
+  const ddl2 = "CREATE TABLE orders (org_id INT NOT NULL, order_id INT NOT NULL, status TEXT, amount DECIMAL(8,2), PRIMARY KEY (org_id, order_id));";
+  const out2 = genSqlSampleData(ddl2, "MySQL", 3, "seed-a");
+  eq("sql sample skips table constraints", out2.startsWith("INSERT INTO orders (org_id, order_id, status, amount) VALUES"), true);
+  let threw = false;
+  try { genSqlSampleData("   ", "PostgreSQL", 5, "x"); } catch { threw = true; }
+  eq("sql sample empty input throws", threw, true);
 }
 
 // --- G2: SQL format / minify ---
