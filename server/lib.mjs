@@ -478,7 +478,7 @@ export function findBrokenTools(tools, baseToolIds = []) {
     const route = String(tool.route ?? tool.slug ?? tool.id);
     const previous = byRoute.get(route);
     if (previous) { broken.push({ id: String(tool.id), reason: `route ${route} duplicates tool ${previous}` }); continue; }
-    if (!/^\/[a-z0-9-]+$/.test(route)) { broken.push({ id: String(tool.id), reason: `route ${route} is not a valid tool route` }); continue; }
+    if (!/^\/[a-z0-9]+(?:-[a-z0-9]+)*(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)*$/.test(route)) { broken.push({ id: String(tool.id), reason: `route ${route} is not a valid tool route` }); continue; }
     byRoute.set(route, String(tool.id));
   }
   return broken;

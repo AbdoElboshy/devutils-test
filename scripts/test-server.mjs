@@ -338,6 +338,8 @@ ok("mergeFeatureFlags ignores unknown keys", () => assert.deepEqual(mergeFeature
 ok("mergeFeatureFlags ignores malformed rows", () => assert.deepEqual(mergeFeatureFlags({ api: false }, [null, 7]), { api: false }));
 ok("findBrokenTools returns empty for a clean registry", () => assert.equal(findBrokenTools([{ id: "a", route: "/a", visibility: "published" }], ["a"]).length, 0));
 ok("findBrokenTools flags a duplicate route", () => assert.equal(findBrokenTools([{ id: "a", route: "/x", visibility: "published" }, { id: "b", route: "/x", visibility: "published" }], ["a", "b"]).length, 1));
+ok("findBrokenTools accepts multi-segment /tools/* routes", () => assert.equal(findBrokenTools([{ id: "aws-arn-parser", route: "/tools/aws-arn-parser", visibility: "published" }, { id: "log-diff", route: "/tools/log-diff", visibility: "published" }], ["aws-arn-parser", "log-diff"]).length, 0));
+ok("findBrokenTools still rejects malformed routes", () => assert.equal(findBrokenTools([{ id: "a", route: "/tools/Bad_Route", visibility: "published" }, { id: "b", route: "tools/b", visibility: "published" }, { id: "c", route: "/a/", visibility: "published" }], ["a", "b", "c"]).length, 3));
 ok("findBrokenTools flags a tool missing from the base registry", () => assert.equal(findBrokenTools([{ id: "ghost", route: "/ghost", visibility: "published" }], ["a"]).length, 1));
 ok("findBrokenTools skips non-published tools", () => assert.equal(findBrokenTools([{ id: "ghost", route: "/ghost", visibility: "draft" }], ["a"]).length, 0));
 

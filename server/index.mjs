@@ -1067,7 +1067,7 @@ app.post("/api/admin/users/:id/revoke-access", requireRole("admin"), async (req,
     if (targetRole === "super_admin" && req.devutils.adminRole !== "super_admin") {
       return res.status(403).json({ error: "Only a super-administrator can revoke another administrator's access." });
     }
-    const { error } = await service.auth.admin.signOut(id);
+    const { error } = await service.auth.admin.signOutById(id);
     if (error) return sendError(res, error, "Access revocation failed.");
     adminCache.delete(id);
     if (!(await recordAdminAuditOrRespond(res, req.devutils.user.id, "user_access_revoked", { target_user_id: id }))) return;
