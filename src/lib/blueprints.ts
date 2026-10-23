@@ -344,32 +344,31 @@ export function parseCurl(cmd: string): HttpReq {
 }
 export function buildCurl(r: HttpReq): string {
   const parts = [`curl -X ${r.method || "GET"} ${q(r.url)}`];
-  if (r.auth && !r.auth.startsWith("Basic ")) parts.push(`-H ${q(`Authorization: Bearer ${r.auth}`)}`);
   if (r.auth.startsWith("Basic ")) parts.push(`-u ${q(r.auth.slice(6))}`);
-  r.headers.forEach((h) => { if (h.k) parts.push(`-H ${q(`${h.k}: ${h.v}`)}`); });
+  effectiveHeaders(r).forEach((h) => { if (h.k) parts.push(`-H ${q(`${h.k}: ${h.v}`)}`); });
   if (r.body) {
-    if (r.contentType) parts.push(`-H ${q(`Content-Type: ${r.contentType}`)}`);
     parts.push(`--data-raw ${q(r.body)}`);
   }
   return parts.join(" \\\n  ");
 }
-export function curlToPython(r: HttpReq): string {
+export function effectiveHeaders(r: HttpReq): { k: string; v: string }[] {
   const h = [...r.headers];
-  if (r.contentType) h.push({ k: "Content-Type", v: r.contentType });
+  if (r.contentType && !h.some((x) => x.k.toLowerCase() === "content-type")) h.push({ k: "Content-Type", v: r.contentType });
   if (r.auth && !r.auth.startsWith("Basic ")) h.push({ k: "Authorization", v: `Bearer ${r.auth}` });
+  return h;
+}
+export function curlToPython(r: HttpReq): string {
+  const h = effectiveHeaders(r);
   return `import requests\n\nurl = ${JSON.stringify(r.url)}\nheaders = ${JSON.stringify(Object.fromEntries(h.map((x) => [x.k, x.v])), null, 2)}\n${r.body ? `payload = ${JSON.stringify(r.body)}\n` : ""}resp = requests.${r.method.toLowerCase() || "get"}(url, headers=headers${r.body ? ", data=payload" : ""})\nprint(resp.status_code)\nprint(resp.text)\n`;
 }
 export function curlToJs(r: HttpReq): string {
-  const h = [...r.headers];
-  if (r.contentType) h.push({ k: "Content-Type", v: r.contentType });
-  if (r.auth && !r.auth.startsWith("Basic ")) h.push({ k: "Authorization", v: `Bearer ${r.auth}` });
+  const h = effectiveHeaders(r);
   return `const res = await fetch(${JSON.stringify(r.url)}, {\n  method: ${JSON.stringify(r.method)},\n  headers: ${JSON.stringify(Object.fromEntries(h.map((x) => [x.k, x.v])), null, 2)}${r.body ? `,\n  body: ${JSON.stringify(r.body)}` : ""}\n});\n\nconsole.log(res.status);\nconsole.log(await res.text());\n`;
 }
 export function curlToGo(r: HttpReq): string {
-  return `package main\n\nimport (\n\t"fmt"\n\t"io"\n\t"net/http"\n\t"strings"\n)\n\nfunc main() {\n\tvar body io.Reader\n${r.body ? `\tbody = strings.NewReader(${JSON.stringify(r.body)})\n` : ""}\treq, _ := http.NewRequest(${JSON.stringify(r.method)}, ${JSON.stringify(r.url)}, body)\n${r.headers.map((h) => `\treq.Header.Set(${JSON.stringify(h.k)}, ${JSON.stringify(h.v)})`).join("\n")}\n${r.auth && !r.auth.startsWith("Basic ") ? `\treq.Header.Set("Authorization", "Bearer ${r.auth}")\n` : ""}\tresp, err := http.DefaultClient.Do(req)\n\tif err != nil { panic(err) }\n\tdefer resp.Body.Close()\n\tb, _ := io.ReadAll(resp.Body)\n\tfmt.Println(resp.Status)\n\tfmt.Println(string(b))\n}\n`;
 }
 export function curlToPhp(r: HttpReq): string {
-  return `<?php\n$ch = curl_init(${JSON.stringify(r.url)});\ncurl_setopt($ch, CURLOPT_CUSTOMREQUEST, ${JSON.stringify(r.method)});\ncurl_setopt($ch, CURLOPT_RETURNTRANSFER, true);\n$headers = [\n${[...r.headers, ...(r.contentType ? [{ k: "Content-Type", v: r.contentType }] : []), ...(r.auth && !r.auth.startsWith("Basic ") ? [{ k: "Authorization", v: `Bearer ${r.auth}` }] : [])].map((h) => `  ${JSON.stringify(`${h.k}: ${h.v}`)},`).join("\n")}\n];\ncurl_setopt($ch, CURLOPT_HTTPHEADER, $headers);\n${r.body ? `curl_setopt($ch, CURLOPT_POSTFIELDS, ${JSON.stringify(r.body)});\n` : ""}$res = curl_exec($ch);\necho $res;\n`;
+  return `<?php\n$ch = curl_init(${JSON.stringify(r.url)});\ncurl_setopt($ch, CURLOPT_CUSTOMREQUEST, ${JSON.stringify(r.method)});\ncurl_setopt($ch, CURLOPT_RETURNTRANSFER, true);\n$headers = [\n${effectiveHeaders(r).map((h) => `  ${JSON.stringify(`${h.k}: ${h.v}`)},`).join("\n")}\n];\ncurl_setopt($ch, CURLOPT_HTTPHEADER, $headers);\n${r.body ? `curl_setopt($ch, CURLOPT_POSTFIELDS, ${JSON.stringify(r.body)});\n` : ""}$res = curl_exec($ch);\necho $res;\n`;
 }
 
 /* ================= HTTP / PORTS / ERRORS ================= */

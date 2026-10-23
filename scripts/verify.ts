@@ -13,7 +13,7 @@ import { cspBuild, robotsBuild, securityTxt, inspectPem, pemFormat } from "../sr
 import { inspectCertificateDocument } from "../src/lib/certificates";
 import { genPassword, genPassphrase, genToken, genUuid, genHex, passwordStrength, formatInZone, dateDiff, addToDate, businessDays, calcAge } from "../src/lib/engine";
 import { searchTools, TOOLS, CATEGORIES, applyRegistryOverlays, resetRegistry } from "../src/lib/registry";
-import { parseCurl, curlToPython, dockerRun, k8sDeployment, ERROR_DB, buildGrep } from "../src/lib/blueprints";
+import { parseCurl, curlToPython, curlToJs, curlToGo, curlToPhp, buildCurl, effectiveHeaders, dockerRun, k8sDeployment, ERROR_DB, buildGrep } from "../src/lib/blueprints";
 import { searchDiscovery, suggestFallback } from "../src/lib/search";
 import { analyzeErrorText } from "../src/lib/error-explorer";
 import { deduplicateLogs, detectLogFormat, extractLogErrors, logSummary, normalizeLogTimestamps } from "../src/lib/logs";
@@ -288,6 +288,22 @@ eq("AWS search", searchTools("aws arn", 20).some((hit) => hit.tool.id === "aws-a
   if (unmapped.length) console.log("  unmapped ids:", unmapped.join(", "));
   console.log(`G1 info: registry tool count = ${TOOLS.length}`);
   eq("G1: registry size within audit baseline (>=100)", TOOLS.length >= 100, true);
+}
+
+// --- G2: cURL converters header dedup (phase7 batch2) ---
+{
+  const r = parseCurl('curl -X POST https://api.example.com/users -H "Content-Type: application/json" -H "Authorization: Bearer TOKEN" --data-raw \'{"name":"maya"}\'');
+  eq("curl php content-type once", curlToPhp(r).split("Content-Type").length - 1, 1);
+  eq("curl python content-type once", curlToPython(r).split("Content-Type").length - 1, 1);
+  eq("curl js content-type once", curlToJs(r).split("Content-Type").length - 1, 1);
+  eq("curl go content-type once", curlToGo(r).split("Content-Type").length - 1, 1);
+  eq("curl build content-type once", buildCurl(r).split("Content-Type").length - 1, 1);
+  eq("curl php auth once", curlToPhp(r).split("Authorization").length - 1, 1);
+  const r2 = parseCurl('curl https://example.com --json \'{"a":1}\'');
+  eq("curl go keeps content-type from --json", curlToGo(r2).includes("Content-Type"), true);
+  eq("curl php keeps content-type from --json", curlToPhp(r2).split("Content-Type").length - 1, 1);
+  const eh = effectiveHeaders({ method: "POST", url: "https://x.dev", headers: [{ k: "content-type", v: "text/plain" }], auth: "", body: "", contentType: "text/plain" });
+  eq("effectiveHeaders dedupes case-insensitively", eh.length, 1);
 }
 
 // --- G2: SQL format / minify ---
