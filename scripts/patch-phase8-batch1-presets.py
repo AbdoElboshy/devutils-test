@@ -1,39 +1,32 @@
 #!/usr/bin/env python3
-"""Phase 8 Batch 1: presets to full Phase 8 spec (UI upgrade + coverage).
+"""Phase 8 Batch 1 v2 — fixes v1 failures, full-spec presets UI.
 
-What exists today (verified against master dc011b0):
-- src/components/presets.tsx: PresetControl with save/select/delete only
-  (no rename, no duplicate, no import/export, no plan-limit display or enforcement)
-- platform.presets (AdaptivePresetRepository over local + cloud) with sanitizeConfig
-- capabilities.getLimit(null, "saved_presets"): anonymous 30, free 60, pro/team/enterprise null
-- PresetControl mounted on: cron, grafana only
-- verify.ts has MemoryStorage block near the end; existing preset repo tests? none found
+v1 status on the target machine: step 1 only (presets.tsx rewritten with the
+inline parsePresetExport). v2 handles that state and fixes v1's bugs:
+- tool-dev.tsx lucide import anchor had wrong indentation (real line is a
+  top-level import, no leading spaces).
+- verify.ts already imports `capabilities` from platform/features; v1 would
+  have duplicated it (TS error). v2 only adds `localPresets` + a new pure
+  module import.
+- SqlTool Panel anchor is NOT unique (ConverterTool has the same opening);
+  v2 anchors on the unique ToolScaffold `next=[... "/diff" }]}>` line.
+- parsePresetExport moved to pure src/lib/preset-io.ts so verify.ts never
+  imports the React component tree.
+- SqlTool preset config excludes raw inputs (sdInput DDL, insRows data) —
+  configuration only, per the SavedPreset contract.
+- test cleanup id fixed (p8-json-quick), CSS typo fixed (zinc-900).
 
-Batch 1 changes:
-1. src/components/presets.tsx — rewrite PresetControl: adds rename (in-line
-   text input + save button), duplicate ("Copy" button per preset row), export
-   (one JSON file per preset via downloadFile), import (file input, JSON
-   schema-validated, toolId checked, sensitive keys stripped by repo layer),
-   plan-limit badge (n/limit, ∞ when null), save blocked at limit with clear
-   error text.
-2. src/tools/tool-dev.tsx — mount PresetControl on JsonTool (config = tab,
-   path, conv, indent; raw input/input2 never saved).
-3. src/tools/tool-data.tsx — mount PresetControl on SqlTool (config = tab,
-   dialect, and per-tab settings states; raw SQL/DDL never saved).
-4. scripts/verify.ts — 10 new tests in a block right after the existing
-   MemoryStorage install: save+list per tool, rename, duplicate, delete,
-   sanitization strips sensitive keys, import validation (malformed JSON
-   rejected, wrong toolId rejected, over-long name truncated), plan-limit
-   check path, export shape.
+Anchors verified against master dc011b0 real text:
+- tool-dev.tsx: 'import { Play, Plus, RefreshCw } from "lucide-react";' (x1)
+- tool-dev.tsx: '<Panel className="p-4">\\n        <Tabs tabs={JSON_TABS} active={tab} onChange={(next) => {' (x1, JSON_TABS unique)
+- tool-data.tsx: '  formatSql, minifySql, genSqlSampleData, yamlParse, csvParse, diffLines, parseJsonError,\\n} from "../lib/engine";' (x1)
+- tool-data.tsx: 'to: "/diff" }]}>\\n      <Panel className="p-4">\\n        <div className="flex flex-wrap items-end gap-2">' (x1)
+- verify.ts: 'import { localPinnedTools, localCollections } from "../src/platform/local-repositories";' (x1)
+- verify.ts: '(globalThis as { localStorage?: unknown }).localStorage = new MemoryStorage();' (x1)
+- verify.ts already has: 'import { capabilities, isFeatureEnabled } from "../src/platform/features";'
 
-Anchors (all verified against master dc011b0 real text):
-- presets.tsx: the whole file is 56 lines; safe to full-rewrite by replacing
-  its exact current content between the import block and end-of-file.
-- tool-dev.tsx: "onExample={() => { setInput(tool.example?.value ?? \"\"); setTab(\"format\"); }}">"
-- tool-data.tsx: "<Panel className=\"p-4\">\n        <div className=\"flex flex-wrap items-end gap-2\">\n          <div className=\"flex flex-wrap gap-1 rounded-xl bg-zinc-100 p-1 dark:bg-zinc-900\">"
-- verify.ts: "(globalThis as { localStorage?: unknown }).localStorage = new MemoryStorage();"
-
-Idempotency: aborts if any of the target files already contain the new markers.
+Idempotency: presets.tsx + preset-io.ts are written unconditionally (both
+known-good full contents); tool pages and verify.ts abort if already patched.
 """
 import pathlib
 import sys
@@ -47,20 +40,11 @@ def one(s, old, new, n=1):
     return s.replace(old, new, n)
 
 
-# ---------------- 1. src/components/presets.tsx (full rewrite) ----------------
-p = root / "src/components/presets.tsx"
-s = p.read_text(encoding="utf-8")
-if "PresetControlV2" in s or "planLimit" in s:
-    print("ABORT: presets.tsx already upgraded")
-    sys.exit(1)
-
-NEW_PRESETS = '''import { useEffect, useState } from "react";
-import { BookmarkPlus, Copy, Download, Trash2, Upload, Pencil } from "lucide-react";
-import { platform, capabilities, type SavedPreset } from "../platform";
-import { downloadFile } from "../lib/engine";
-import { Btn, Select, TextInput } from "./ui";
-
-type PresetConfig = Record<string, boolean | number | string>;
+# ---------------- 0. src/lib/preset-io.ts (pure module, new) ----------------
+p = root / "src/lib/preset-io.ts"
+PRESET_IO = '''// Preset import/export parsing — pure module so it is unit-testable in Node
+// without importing the React component tree.
+export type PresetConfig = Record<string, boolean | number | string>;
 
 /** Export shape for one preset. toolId always travels with the config. */
 export type PresetExport = {
@@ -69,7 +53,7 @@ export type PresetExport = {
   config: PresetConfig;
 };
 
-function parsePresetExport(raw: string, toolId: string): PresetExport {
+export function parsePresetExport(raw: string, toolId: string): PresetExport {
   const value = JSON.parse(raw) as Record<string, unknown>;
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Preset file must be a JSON object.");
   const fileToolId = String(value.toolId ?? "");
@@ -85,6 +69,18 @@ function parsePresetExport(raw: string, toolId: string): PresetExport {
   if (!Object.keys(config).length) throw new Error("Preset config is empty or has no supported value types.");
   return { toolId, name, config };
 }
+'''
+p.write_text(PRESET_IO, encoding="utf-8")
+print("preset-io.ts: pure import/export parser written")
+
+# ---------------- 1. src/components/presets.tsx (full rewrite, handles v1 state) ----------------
+p = root / "src/components/presets.tsx"
+NEW_PRESETS = '''import { useEffect, useState } from "react";
+import { BookmarkPlus, Copy, Download, Trash2, Upload, Pencil } from "lucide-react";
+import { platform, capabilities, type SavedPreset } from "../platform";
+import { downloadFile } from "../lib/engine";
+import { parsePresetExport, type PresetConfig, type PresetExport } from "../lib/preset-io";
+import { Btn, Select, TextInput } from "./ui";
 
 export function PresetControl({
   toolId,
@@ -182,7 +178,7 @@ export function PresetControl({
           <Btn variant="ghost" className="px-2 py-1.5" title="Delete the selected preset" onClick={() => { void platform.presets.remove(selected); setSelected(""); }}><Trash2 size={14} /></Btn>
         </>
       )}
-      <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1.5 text-[13px] font-medium text-zinc-600 hover:bg-zinc-100 hover:text-zin-900 dark:text-zinc-400 dark:hover:bg-zinc-800" title="Import a preset JSON file">
+      <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1.5 text-[13px] font-medium text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800" title="Import a preset JSON file">
         <Upload size={14} /> Import
         <input type="file" accept=".json,application/json" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) importPreset(file); event.target.value = ""; }} />
       </label>
@@ -192,16 +188,8 @@ export function PresetControl({
   );
 }
 '''
-
-# Full-file rewrite: the existing file is small and fully known. Replace from
-# the first import line to EOF with the new implementation.
-first_import = 'import { useEffect, useState } from "react";'
-s = one(s, first_import, NEW_PRESETS + "\n", 1)
-# The original file content after the first import line is replaced wholesale;
-# remove any residual original code that followed (verify nothing remains).
-# Original file: 56 lines total, all replaced.
-p.write_text(s, encoding="utf-8")
-print("presets.tsx: PresetControl rewritten to full spec (rename/duplicate/import/export/plan-limit)")
+p.write_text(NEW_PRESETS, encoding="utf-8")
+print("presets.tsx: PresetControl rewritten to full spec (parsePresetExport now from lib)")
 
 # ---------------- 2. src/tools/tool-dev.tsx (JsonTool mount) ----------------
 p = root / "src/tools/tool-dev.tsx"
@@ -212,8 +200,8 @@ if "PresetControl" in s:
 
 s = one(
     s,
-    '  Play, Plus, RefreshCw } from "lucide-react";',
-    '  Play, Plus, RefreshCw } from "lucide-react";\nimport { PresetControl } from "../components/presets";',
+    'import { Play, Plus, RefreshCw } from "lucide-react";',
+    'import { Play, Plus, RefreshCw } from "lucide-react";\nimport { PresetControl } from "../components/presets";',
     1,
 )
 
@@ -252,42 +240,15 @@ s = one(
     1,
 )
 
-SQL_MOUNT = '''      <Panel className="p-4">
-        <PresetControl
-          toolId="sql"
-          config={{ tab, dialect, tName, cols, insTable, insCols, selTable, selCols, selWhere, selLimit, connDb, connHost, connPort, connDbName, connUser, sdInput, sdRows, sdSeed }}
-          onApply={(preset) => {
-            setTab(String(preset.tab ?? tab));
-            setDialect((preset.dialect ?? dialect) as Dialect);
-            setTName(String(preset.tName ?? tName));
-            setCols(String(preset.cols ?? cols));
-            setInsTable(String(preset.insTable ?? insTable));
-            setInsCols(String(preset.insCols ?? insCols));
-            setInsRows(String(preset.insRows ?? insRows));
-            setSelTable(String(preset.selTable ?? selTable));
-            setSelCols(String(preset.selCols ?? selCols));
-            setSelWhere(String(preset.selWhere ?? selWhere));
-            setSelLimit(String(preset.selLimit ?? selLimit));
-            setConnDb((preset.connDb ?? connDb) as Dialect);
-            setConnHost(String(preset.connHost ?? connHost));
-            setConnPort(String(preset.connPort ?? connPort));
-            setConnDbName(String(preset.connDbName ?? connDbName));
-            setConnUser(String(preset.connUser ?? connUser));
-            setSdInput(String(preset.sdInput ?? sdInput));
-            setSdRows(String(preset.sdRows ?? sdRows));
-            setSdSeed(String(preset.sdSeed ?? sdSeed));
-          }}
-        />
-        <div className="flex flex-wrap items-end gap-2">
-'''
+SQL_MOUNT = '''to: "/diff" }]}>\n      <Panel className="p-4">\n        <PresetControl\n          toolId="sql"\n          config={{ tab, dialect, tName, cols, insTable, insCols, selTable, selCols, selWhere, selLimit, connDb, connHost, connPort, connDbName, connUser, sdRows, sdSeed }}\n          onApply={(preset) => {\n            setTab(String(preset.tab ?? tab));\n            setDialect((preset.dialect ?? dialect) as Dialect);\n            setTName(String(preset.tName ?? tName));\n            setCols(String(preset.cols ?? cols));\n            setInsTable(String(preset.insTable ?? insTable));\n            setInsCols(String(preset.insCols ?? insCols));\n            setSelTable(String(preset.selTable ?? selTable));\n            setSelCols(String(preset.selCols ?? selCols));\n            setSelWhere(String(preset.selWhere ?? selWhere));\n            setSelLimit(String(preset.selLimit ?? selLimit));\n            setConnDb((preset.connDb ?? connDb) as Dialect);\n            setConnHost(String(preset.connHost ?? connHost));\n            setConnPort(String(preset.connPort ?? connPort));\n            setConnDbName(String(preset.connDbName ?? connDbName));\n            setConnUser(String(preset.connUser ?? connUser));\n            setSdRows(String(preset.sdRows ?? sdRows));\n            setSdSeed(String(preset.sdSeed ?? sdSeed));\n          }}\n        />\n        <div className="flex flex-wrap items-end gap-2">'''
 s = one(
     s,
-    '      <Panel className="p-4">\n        <div className="flex flex-wrap items-end gap-2">',
+    'to: "/diff" }]}>\n      <Panel className="p-4">\n        <div className="flex flex-wrap items-end gap-2">',
     SQL_MOUNT,
     1,
 )
 p.write_text(s, encoding="utf-8")
-print("tool-data.tsx: PresetControl mounted on SqlTool")
+print("tool-data.tsx: PresetControl mounted on SqlTool (config-only keys)")
 
 # ---------------- 4. scripts/verify.ts (10 tests) ----------------
 p = root / "scripts/verify.ts"
@@ -299,14 +260,13 @@ if "p8b1:" in s:
 s = one(
     s,
     'import { localPinnedTools, localCollections } from "../src/platform/local-repositories";',
-    'import { localPinnedTools, localCollections, localPresets } from "../src/platform/local-repositories";\nimport { capabilities } from "../src/platform/features";\nimport { parsePresetExport } from "../src/components/presets";',
+    'import { localPinnedTools, localCollections, localPresets } from "../src/platform/local-repositories";\nimport { parsePresetExport } from "../src/lib/preset-io";',
     1,
 )
 
 TESTS = r'''// --- P8 B1: presets — full-spec UI helpers + repo behavior ---
 {
-  const limit = capabilities.getLimit(null, "saved_presets");
-  eq("p8b1: anonymous preset limit is 30", limit, 30);
+  eq("p8b1: anonymous preset limit is 30", capabilities.getLimit(null, "saved_presets"), 30);
   const before = (await localPresets.list()).length;
   const now = new Date().toISOString();
   const mk = (toolId: string, name: string, extra: Record<string, boolean | number | string> = {}) => ({ id: `p8-${toolId}-${name}`, toolId, name, config: { dialect: "PostgreSQL", ...extra }, createdAt: now, updatedAt: now, version: 1 as const });
@@ -331,8 +291,7 @@ TESTS = r'''// --- P8 B1: presets — full-spec UI helpers + repo behavior ---
   eq("p8b1: import parse keeps safe config", good.config.dialect, "MySQL");
   await localPresets.remove("p8-sql-prod copy");
   eq("p8b1: delete removes only the target", (await localPresets.list("sql")).some((x) => x.id === "p8-sql-prod copy"), false);
-  // cleanup so the global preset count is unchanged for other tests
-  for (const id of ["p8-sql-prod", "p8-sql-prod copy", "p8-sql-quick", "p8-cron-leaky"]) await localPresets.remove(id);
+  for (const id of ["p8-sql-prod", "p8-sql-prod copy", "p8-json-quick", "p8-cron-leaky"]) await localPresets.remove(id);
   eq("p8b1: cleanup restores count", (await localPresets.list()).length, before);
 }
 

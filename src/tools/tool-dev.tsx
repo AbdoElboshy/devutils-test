@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Play, Plus, RefreshCw } from "lucide-react";
+import { PresetControl } from "../components/presets";
 import {
   formatJson, minifyJson, sortJson, flattenJson, unflattenJson, extractKeyPaths, queryJsonPath,
   jsonToTypeScript, jsonToPython, jsonToGo, jsonToJava, jsonToCSharp, jsonToJavaScript,
@@ -96,6 +97,16 @@ export function JsonTool({ initialTab = "format" }: { initialTab?: string }) {
     <ToolScaffold tool={tool} next={nextMap[tab]}
       onExample={() => { setInput(tool.example?.value ?? ""); setTab("format"); }}>
       <Panel className="p-4">
+        <PresetControl
+          toolId="json"
+          config={{ tab, path, conv, indent }}
+          onApply={(preset) => {
+            setTab(String(preset.tab ?? tab));
+            setPath(String(preset.path ?? path));
+            setConv(String(preset.conv ?? conv));
+            setIndent(String(preset.indent ?? indent));
+          }}
+        />
         <Tabs tabs={JSON_TABS} active={tab} onChange={(next) => {
           setTab(next);
           if (next === "pointer" && path.startsWith("$")) setPath("/tools/0");

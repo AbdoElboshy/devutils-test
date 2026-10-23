@@ -3,6 +3,7 @@ import {
   jsonToYaml, yamlToJson, jsonToCsv, csvToJson, jsonToXml, xmlToJson, jsonToToml, tomlToJson,
   formatSql, minifySql, genSqlSampleData, yamlParse, csvParse, diffLines, parseJsonError,
 } from "../lib/engine";
+import { PresetControl } from "../components/presets";
 import { TOOL_MAP } from "../lib/registry";
 import {
   ToolScaffold, Panel, Field, TextInput, Select, Btn, CopyBtn,
@@ -164,6 +165,29 @@ export function SqlTool() {
   return (
     <ToolScaffold tool={tool} next={[{ label: "Seed from CSV/JSON", to: "/convert" }, { label: "Compare queries", to: "/diff" }]}>
       <Panel className="p-4">
+        <PresetControl
+          toolId="sql"
+          config={{ tab, dialect, tName, cols, insTable, insCols, selTable, selCols, selWhere, selLimit, connDb, connHost, connPort, connDbName, connUser, sdRows, sdSeed }}
+          onApply={(preset) => {
+            setTab(String(preset.tab ?? tab));
+            setDialect((preset.dialect ?? dialect) as Dialect);
+            setTName(String(preset.tName ?? tName));
+            setCols(String(preset.cols ?? cols));
+            setInsTable(String(preset.insTable ?? insTable));
+            setInsCols(String(preset.insCols ?? insCols));
+            setSelTable(String(preset.selTable ?? selTable));
+            setSelCols(String(preset.selCols ?? selCols));
+            setSelWhere(String(preset.selWhere ?? selWhere));
+            setSelLimit(String(preset.selLimit ?? selLimit));
+            setConnDb((preset.connDb ?? connDb) as Dialect);
+            setConnHost(String(preset.connHost ?? connHost));
+            setConnPort(String(preset.connPort ?? connPort));
+            setConnDbName(String(preset.connDbName ?? connDbName));
+            setConnUser(String(preset.connUser ?? connUser));
+            setSdRows(String(preset.sdRows ?? sdRows));
+            setSdSeed(String(preset.sdSeed ?? sdSeed));
+          }}
+        />
         <div className="flex flex-wrap items-end gap-2">
           <div className="flex flex-wrap gap-1 rounded-xl bg-zinc-100 p-1 dark:bg-zinc-900">
             {[["format", "Format"], ["minify", "Minify"], ["create", "CREATE TABLE"], ["insert", "INSERT"], ["select", "SELECT"], ["conn", "Connection"], ["sample", "Sample data"], ["diff", "Diff"]].map(([id, label]) => (

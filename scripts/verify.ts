@@ -24,7 +24,8 @@ import { capabilities, isFeatureEnabled } from "../src/platform/features";
 import { awsCliCommand, awsSecurityGroupRule, buildArn, buildIamPolicy, buildLogQl, buildPromQl, calculateMetric, calculateSlo, grafanaDashboard, grafanaTemplate, infrastructureName, parseArn, parseAzureResourceId, parseGcpResource, parseS3Url, percentile, prometheusRule, prometheusScrapeConfig, validateGrafanaDashboard, zabbixApiExample, zabbixExpression, zabbixItem, zabbixLinuxTemplate, zabbixTemplate, zabbixTrigger } from "../src/lib/devops-platform";
 import { AnonymousAuthProvider } from "../src/platform/auth";
 import { AdaptivePinnedToolsRepository } from "../src/platform/adaptive-repositories";
-import { localPinnedTools, localCollections } from "../src/platform/local-repositories";
+import { localPinnedTools, localCollections, localPresets } from "../src/platform/local-repositories";
+import { parsePresetExport } from "../src/lib/preset-io";
 import type { AuthProvider, PinnedToolsRepository } from "../src/platform/contracts";
 import { classifyRoute } from "../src/lib/routes";
 
@@ -496,6 +497,39 @@ eq("AWS search", searchTools("aws arn", 20).some((hit) => hit.tool.id === "aws-a
     removeItem(key: string) { this.map.delete(key); }
   }
   (globalThis as { localStorage?: unknown }).localStorage = new MemoryStorage();
+
+// --- P8 B1: presets — full-spec UI helpers + repo behavior ---
+{
+  eq("p8b1: anonymous preset limit is 30", capabilities.getLimit(null, "saved_presets"), 30);
+  const before = (await localPresets.list()).length;
+  const now = new Date().toISOString();
+  const mk = (toolId: string, name: string, extra: Record<string, boolean | number | string> = {}) => ({ id: `p8-${toolId}-${name}`, toolId, name, config: { dialect: "PostgreSQL", ...extra }, createdAt: now, updatedAt: now, version: 1 as const });
+  await localPresets.save(mk("sql", "prod"));
+  await localPresets.save(mk("sql", "prod copy", { seed: "abc" }));
+  await localPresets.save(mk("json", "quick"));
+  eq("p8b1: list per tool filters", (await localPresets.list("sql")).length, 2);
+  eq("p8b1: save persists name and config", (await localPresets.list("sql")).find((x) => x.name === "prod")!.config.dialect, "PostgreSQL");
+  await localPresets.save({ ...mk("sql", "renamed"), id: "p8-sql-prod", name: "renamed", updatedAt: now });
+  eq("p8b1: rename keeps same id", (await localPresets.list("sql")).some((x) => x.id === "p8-sql-prod" && x.name === "renamed"), true);
+  const sensitive = mk("cron", "leaky", { token: "s3cr3t", expression: "*/15 * * * *" });
+  await localPresets.save(sensitive);
+  const storedLeaky = (await localPresets.list("cron")).find((x) => x.id === sensitive.id);
+  eq("p8b1: sanitization strips sensitive keys", "token" in (storedLeaky?.config ?? {}), false);
+  let parseThrew = false;
+  try { parsePresetExport('{"toolId":"json","name":"x","config":{"a":1}}', "sql"); } catch { parseThrew = true; }
+  eq("p8b1: import rejects wrong toolId", parseThrew, true);
+  let malformedThrew = false;
+  try { parsePresetExport("{not json", "sql"); } catch { malformedThrew = true; }
+  eq("p8b1: import rejects malformed JSON", malformedThrew, true);
+  const good = parsePresetExport('{"toolId":"sql","name":"shared","config":{"dialect":"MySQL"}}', "sql");
+  eq("p8b1: import parse keeps safe config", good.config.dialect, "MySQL");
+  await localPresets.remove("p8-sql-prod copy");
+  eq("p8b1: delete removes only the target", (await localPresets.list("sql")).some((x) => x.id === "p8-sql-prod copy"), false);
+  for (const id of ["p8-sql-prod", "p8-sql-prod copy", "p8-json-quick", "p8-cron-leaky"]) await localPresets.remove(id);
+  eq("p8b1: cleanup restores count", (await localPresets.list()).length, before);
+}
+
+
 
 const pinned = localPinnedTools;
   await pinned.pin("json");
