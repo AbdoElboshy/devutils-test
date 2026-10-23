@@ -6,7 +6,7 @@ import {
   KeyRound, GitBranch, Workflow, FileKey, CalendarClock as CronIcon, Hash, SquareTerminal,
   Plug, Gauge, Globe2, FileDigit, ArrowLeftRight, KeySquare, Fingerprint, ShieldAlert,
   Award, QrCode, Repeat, TableProperties, Braces as BracesIcon, ALargeSmall, Timer,
-  Earth, CalendarDays, Siren, LayoutGrid, Activity, BarChart3, Cloud, Pin,
+  Earth, CalendarDays, Siren, LayoutGrid, Activity, BarChart3, Cloud, Pin, Palette, FileText,
 } from "lucide-react";
 import { Header, Footer, CommandPalette } from "./components/chrome";
 import { useEntityFavorite, useFavorites, usePinned, useRecents, Panel } from "./components/ui";
@@ -21,6 +21,7 @@ import { JwtTool, HashTool, SecretsTool, WebsecTool, CertTool } from "./tools/to
 import { EncodeTool, QrTool } from "./tools/tool-encode";
 import { ConverterTool, SqlTool } from "./tools/tool-data";
 import { TextTool, TimestampTool, TimezoneTool, DateCalcTool } from "./tools/tool-texttime";
+import { PhpSerializeTool, HtmlToJsxTool, ColorConvertTool, MarkdownTool, UlidTool, BaseConvertTool } from "./tools/tool-phase7";
 import { LogsTool } from "./tools/tool-logs";
 import { WorkflowsPage } from "./pages/workflows";
 import { WORKFLOW_TEMPLATES } from "./data/workflows";
@@ -59,7 +60,7 @@ const TOOL_ICONS: Record<string, typeof Braces> = {
   curl: ArrowLeftRight, ports: Plug, jwt: KeySquare, hash: Fingerprint, secrets: Sparkles,
   websec: ShieldAlert, cert: Award, encode: Binary, qr: QrCode, converter: Repeat,
   jsonschema: BracesIcon, sql: TableProperties, text: ALargeSmall, timestamp: Timer,
-  timezone: Earth, datecalc: CalendarDays, errors: Siren,
+  timezone: Earth, datecalc: CalendarDays, errors: Siren, color: Palette, markdown: FileText, "php-serialize": Braces, "html-to-jsx": FileCode, ulid: Dices, "base-convert": Binary,
   logs: TerminalSquare,
   "api-schema": Globe2,
   monitoring: Gauge, prometheus: Activity, grafana: BarChart3, zabbix: Activity,
@@ -289,6 +290,12 @@ function ToolView({ id }: { id: string }) {
     case "timestamp": return <TimestampTool />;
     case "timezone": return <TimezoneTool />;
     case "datecalc": return <DateCalcTool />;
+    case "php-serialize": return <PhpSerializeTool />;
+    case "html-to-jsx": return <HtmlToJsxTool />;
+    case "color": return <ColorConvertTool />;
+    case "markdown": return <MarkdownTool />;
+    case "ulid": return <UlidTool />;
+    case "base-convert": return <BaseConvertTool />;
     default: return <NotFound onSearch={() => {}} />;
   }
 }
