@@ -366,6 +366,7 @@ export function curlToJs(r: HttpReq): string {
   return `const res = await fetch(${JSON.stringify(r.url)}, {\n  method: ${JSON.stringify(r.method)},\n  headers: ${JSON.stringify(Object.fromEntries(h.map((x) => [x.k, x.v])), null, 2)}${r.body ? `,\n  body: ${JSON.stringify(r.body)}` : ""}\n});\n\nconsole.log(res.status);\nconsole.log(await res.text());\n`;
 }
 export function curlToGo(r: HttpReq): string {
+  return `package main\n\nimport (\n\t"fmt"\n\t"io"\n\t"net/http"\n\t"strings"\n)\n\nfunc main() {\n\tvar body io.Reader\n${r.body ? `\tbody = strings.NewReader(${JSON.stringify(r.body)})\n` : ""}\treq, _ := http.NewRequest(${JSON.stringify(r.method)}, ${JSON.stringify(r.url)}, body)\n${effectiveHeaders(r).map((h) => `\treq.Header.Set(${JSON.stringify(h.k)}, ${JSON.stringify(h.v)})`).join("\n")}\n\tresp, err := http.DefaultClient.Do(req)\n\tif err != nil { panic(err) }\n\tdefer resp.Body.Close()\n\tb, _ := io.ReadAll(resp.Body)\n\tfmt.Println(resp.Status)\n\tfmt.Println(string(b))\n}\n`;
 }
 export function curlToPhp(r: HttpReq): string {
   return `<?php\n$ch = curl_init(${JSON.stringify(r.url)});\ncurl_setopt($ch, CURLOPT_CUSTOMREQUEST, ${JSON.stringify(r.method)});\ncurl_setopt($ch, CURLOPT_RETURNTRANSFER, true);\n$headers = [\n${effectiveHeaders(r).map((h) => `  ${JSON.stringify(`${h.k}: ${h.v}`)},`).join("\n")}\n];\ncurl_setopt($ch, CURLOPT_HTTPHEADER, $headers);\n${r.body ? `curl_setopt($ch, CURLOPT_POSTFIELDS, ${JSON.stringify(r.body)});\n` : ""}$res = curl_exec($ch);\necho $res;\n`;
