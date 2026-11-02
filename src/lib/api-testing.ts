@@ -90,7 +90,7 @@ export function lintGraphQL(input: string): ApiReport {
   }
   const queryWord = value.match(/\b(query|mutation|subscription)\b/i);
   if (queryWord) {
-    const operationName = value.slice(queryWord.index! + queryWord[0].length).match(/^(\w+)/);
+    const operationName = value.slice(queryWord.index! + queryWord[0].length).match(/^\s*(\w+)/);
     if (!operationName && !/^(query|mutation|subscription)\s*\{/i.test(value)) issues.push({ message: "Operation name or '{' expected after the operation keyword." });
   }
   return { ok: issues.length === 0, issues };
