@@ -385,7 +385,7 @@ ok("collection item without target rejected", () => assert.equal(safeCollectionI
 
 /* ---------------- Phase 10 API v1: auth, rate limit, quota, errors ---------------- */
 import {
-  parseBearer, hashApiKey, authzKey, allowRate, checkMonthlyQuota, apiV1ErrorStatus, API_V1_PLAN_LIMITS,
+  parseBearer, hashApiKey, authzKey, allowRate, checkMonthlyQuota, apiV1ErrorStatus, API_V1_PLAN_LIMITS, monthKey,
 } from "../server/api-v1.mjs";
 
 ok("parseBearer accepts a du_live key", () => assert.equal(parseBearer("Bearer du_live_abc123"), "du_live_abc123"));
@@ -424,6 +424,10 @@ ok("apiV1ErrorStatus maps validation to 400", () => assert.equal(apiV1ErrorStatu
 ok("apiV1ErrorStatus maps AppError INVALID_INPUT to 400", () => assert.equal(apiV1ErrorStatus({ code: "INVALID_INPUT", name: "AppError" }), 400));
 ok("apiV1ErrorStatus maps unknown to 500", () => assert.equal(apiV1ErrorStatus(new Error("boom")), 500));
 ok("API_V1_PLAN_LIMITS mirrors features.ts", () => assert.deepEqual({ ...API_V1_PLAN_LIMITS }, { anonymous: 0, free: 1000, pro: 50000, team: 250000, enterprise: null }));
+
+ok("p10b2db: monthKey formats January", () => assert.equal(monthKey(new Date(Date.UTC(2026, 0, 15))), "2026-01"));
+ok("p10b2db: monthKey formats December", () => assert.equal(monthKey(new Date(Date.UTC(2026, 11, 31))), "2026-12"));
+ok("p10b2db: monthKey year rollover", () => assert.equal(monthKey(new Date(Date.UTC(2027, 0, 1))), "2027-01"));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

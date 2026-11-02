@@ -90,7 +90,7 @@ export const API_V1_PLAN_LIMITS = Object.freeze({ anonymous: 0, free: 1000, pro:
 
 /* ---------- in-memory usage counter (injectable for persistence later) ---------- */
 
-function monthKey(date = new Date()) {
+export function monthKey(date = new Date()) {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
@@ -150,6 +150,7 @@ export function mountApiV1(app, { service, usage, planOf }) {
 
   app.options("/api/v1/operations", (_req, res) => { corsHeaders(res); res.status(204).end(); });
   app.options("/api/v1/operations/:id/execute", (_req, res) => { corsHeaders(res); res.status(204).end(); });
+  app.options("/api/v1/usage", (_req, res) => { corsHeaders(res); res.status(204).end(); });
 
   app.get("/api/v1/operations", async (req, res) => {
     const key = await authenticate(req, res, "tools:read");
@@ -161,6 +162,20 @@ export function mountApiV1(app, { service, usage, planOf }) {
       maximumInputBytes: op.maximumInputBytes ?? null, clientSide: Boolean(op.clientSide),
     }));
     res.json({ ok: true, operations: list, count: list.length });
+  });
+
+  app.get("/api/v1/usage", async (req, res) => {
+    const key = await authenticate(req, res, "tools:read");
+    if (!key) return;
+    corsHeaders(res);
+    try {
+      const planId = await planLimitOf(key.userId);
+      const limit = API_V1_PLAN_LIMITS[planId] ?? API_V1_PLAN_LIMITS.free;
+      const used = await usageStore.read(key.userId);
+      res.json({ ok: true, plan: planId, limit, remaining: limit === null ? null : Math.max(0, limit - used), used, month: monthKey() });
+    } catch {
+      res.status(502).json({ error: "Usage lookup unavailable." });
+    }
   });
 
   app.post("/api/v1/operations/:id/execute", async (req, res) => {
