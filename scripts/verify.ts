@@ -25,7 +25,10 @@ import { awsCliCommand, awsSecurityGroupRule, buildArn, buildIamPolicy, buildLog
 import { AnonymousAuthProvider } from "../src/platform/auth";
 import { AdaptivePinnedToolsRepository } from "../src/platform/adaptive-repositories";
 import { localPinnedTools, localCollections, localPresets } from "../src/platform/local-repositories";
+import { operations } from "../src/platform/operations";
 import { parsePresetExport } from "../src/lib/preset-io";
+import { validateSteps, serializeWorkflowExport, parseWorkflowExport } from "../src/lib/workflow-io";
+import { snapshotVersion, listVersions, clearVersions, clearAllVersions } from "../src/lib/workflow-versions";
 import type { AuthProvider, PinnedToolsRepository } from "../src/platform/contracts";
 import { classifyRoute } from "../src/lib/routes";
 
@@ -528,6 +531,47 @@ eq("AWS search", searchTools("aws arn", 20).some((hit) => hit.tool.id === "aws-a
   for (const id of ["p8-sql-prod", "p8-sql-prod copy", "p8-json-quick", "p8-cron-leaky"]) await localPresets.remove(id);
   eq("p8b1: cleanup restores count", (await localPresets.list()).length, before);
 }
+
+// --- P8 B2: workflows — static validation, import/export, versioning ---
+{
+  const known = operations.list().map((op) => op.id);
+  const step = (id: string, operationId: string, label: string, config?: Record<string, boolean | number | string>) => ({ id, operationId, label, ...(config ? { config } : {}) });
+  eq("p8b2: empty steps rejected", validateSteps([], known).length > 0, true);
+  eq("p8b2: unknown operation rejected", validateSteps([step("a", "nope.nope", "A")], known).some((i) => i.message.includes("Unknown operation")), true);
+  eq("p8b2: over 20 steps rejected", validateSteps(Array.from({ length: 21 }, (_, i) => step(`s${i}`, "json.validate", `S${i}`)), known).length > 0, true);
+  eq("p8b2: duplicate step ids rejected", validateSteps([step("a", "json.validate", "A"), step("a", "json.format", "B")], known).some((i) => i.message.includes("Duplicate")), true);
+  eq("p8b2: bad config type rejected", validateSteps([step("a", "json.validate", "A", { bad: null as unknown as boolean })], known).some((i) => i.message.includes("must be a string")), true);
+  eq("p8b2: over-long label rejected", validateSteps([step("a", "json.validate", "x".repeat(101))], known).some((i) => i.message.includes("100 characters")), true);
+  eq("p8b2: valid chain passes", validateSteps([step("v", "json.validate", "Validate"), step("f", "json.format", "Format"), step("y", "json.to-yaml", "To YAML")], known), []);
+  let threw = false;
+  try { parseWorkflowExport("{bad json"); } catch { threw = true; }
+  eq("p8b2: malformed import rejected", threw, true);
+  threw = false;
+  try { parseWorkflowExport('{"steps":[{"operationId":"json.validate","label":"V"}]}'); } catch { threw = true; }
+  eq("p8b2: nameless import rejected", threw, true);
+  threw = false;
+  try { parseWorkflowExport('{"name":"x","steps":[]}'); } catch { threw = true; }
+  eq("p8b2: steps-less import rejected", threw, true);
+  const imported = parseWorkflowExport('{"name":"Imported","description":"d","steps":[{"operationId":"json.validate","label":"V"},{"operationId":"json.format","label":"F"}]}');
+  eq("p8b2: import maps steps and source", [imported.source, imported.steps.map((st) => st.operationId)], ["custom", ["json.validate", "json.format"]]);
+  const base = { id: "wf-rt", name: "RT", description: "roundtrip", steps: [step("v", "json.validate", "Validate"), step("f", "json.format", "Format")], source: "custom" as const, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", version: 1 as const };
+  const rt = parseWorkflowExport(JSON.stringify(serializeWorkflowExport(base)));
+  eq("p8b2: export round trip keeps steps", rt.steps.map((st) => st.operationId), ["json.validate", "json.format"]);
+  clearAllVersions();
+  const wf = { ...base, id: "wf-ver" };
+  snapshotVersion(wf);
+  eq("p8b2: snapshot creates version 1", listVersions("wf-ver")[0]!.version, 1);
+  snapshotVersion({ ...wf, name: "Second" });
+  eq("p8b2: second snapshot newest-first", listVersions("wf-ver").map((r) => r.version), [2, 1]);
+  for (let i = 0; i < 7; i++) snapshotVersion({ ...wf, name: `N${i}` });
+  eq("p8b2: history capped at 5", listVersions("wf-ver").length, 5);
+  snapshotVersion({ ...base, id: "wf-other" });
+  clearVersions("wf-ver");
+  eq("p8b2: clearVersions removes only target", [listVersions("wf-ver").length, listVersions("wf-other").length], [0, 1]);
+  clearAllVersions();
+  eq("p8b2: clearAllVersions empties history", listVersions("wf-other").length, 0);
+}
+
 
 
 
