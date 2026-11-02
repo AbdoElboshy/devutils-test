@@ -33,6 +33,7 @@ import type { WorkflowRun } from "../src/platform/workflows";
 import { recordRun, listRuns, clearRuns, clearAllRuns } from "../src/lib/workflow-history";
 import { quotaStatus, quotaLabel } from "../src/lib/quota";
 import { parseTraceparent, buildTraceparent, inspectSpan, buildCollectorConfig, buildPostmortem } from "../src/lib/otel";
+import { buildCloudWatchQuery, buildCloudWatchAlarm, inspectTerraformPlan, buildRbacBinding, buildHelmValues } from "../src/lib/cloud-iac";
 import type { AuthProvider, PinnedToolsRepository } from "../src/platform/contracts";
 import { classifyRoute } from "../src/lib/routes";
 
@@ -653,6 +654,41 @@ eq("AWS search", searchTools("aws arn", 20).some((hit) => hit.tool.id === "aws-a
   eq("p9b1: postmortem renders action items", [pm.includes("- [ ] Add pool alerts"), pm.includes("- [ ] Document playbook")], [true, true]);
   throws("p9b1: postmortem requires timeline", () => buildPostmortem({ title: "x", severity: "sev3", timeline: [], impact: "", rootCause: "", resolution: "", actionItems: [] }));
 }
+
+// --- P9 B2: CloudWatch / Terraform plan / RBAC / Helm ---
+{
+  const q = buildCloudWatchQuery({ namespace: "AWS/EC2", metricName: "CPUUtilization", statistic: "avg", dimensions: [{ name: "InstanceId", value: "i-123" }] });
+  eq("p9b2: metrics insights select clause", q.includes('SELECT AVG(CPUUtilization) FROM "AWS/EC2"'), true);
+  eq("p9b2: metrics insights where clause", q.includes("WHERE InstanceId = 'i-123'"), true);
+  throws("p9b2: metrics insights rejects bad statistic", () => buildCloudWatchQuery({ namespace: "AWS/EC2", metricName: "CPUUtilization", statistic: "median", dimensions: [] }));
+  throws("p9b2: metrics insights rejects bad metric name", () => buildCloudWatchQuery({ namespace: "AWS/EC2", metricName: "bad metric!", statistic: "AVG", dimensions: [] }));
+
+  const alarm = buildCloudWatchAlarm({ alarmName: "high-cpu", namespace: "AWS/EC2", metricName: "CPUUtilization", statistic: "AVG", threshold: 80, comparisonOperator: "GreaterThanThreshold", periodSeconds: 300, evaluationPeriods: 2 });
+  eq("p9b2: alarm fields", [alarm.AlarmName, alarm.Threshold, alarm.ComparisonOperator, alarm.Period, alarm.EvaluationPeriods], ["high-cpu", 80, "GreaterThanThreshold", 300, 2]);
+  throws("p9b2: alarm rejects bad comparison", () => buildCloudWatchAlarm({ alarmName: "x", namespace: "AWS/EC2", metricName: "CPUUtilization", statistic: "AVG", threshold: 1, comparisonOperator: "equals", periodSeconds: 60, evaluationPeriods: 1 }));
+  throws("p9b2: alarm rejects zero evaluation periods", () => buildCloudWatchAlarm({ alarmName: "x", namespace: "AWS/EC2", metricName: "CPUUtilization", statistic: "AVG", threshold: 1, comparisonOperator: "LessThanThreshold", periodSeconds: 60, evaluationPeriods: 0 }));
+
+  const plan = inspectTerraformPlan({ resource_changes: [
+    { address: "aws_instance.web", change: { actions: ["create"] } },
+    { address: "aws_s3_bucket.logs", change: { actions: ["update"] } },
+    { address: "aws_iam_user.old", change: { actions: ["delete"] } },
+    { address: "aws_security_group.api", change: { actions: ["delete", "create"] } },
+  ] });
+  eq("p9b2: plan action summary", [plan.total, plan.create, plan.update, plan.delete, plan.replace, plan.noop], [4, 1, 1, 1, 1, 0]);
+  eq("p9b2: plan flags destroys and replacements", [plan.destroys, plan.replacements], [["aws_iam_user.old"], ["aws_security_group.api"]]);
+  throws("p9b2: plan inspector rejects non-plan input", () => inspectTerraformPlan({}));
+
+  const rbac = buildRbacBinding({ kind: "Role", name: "pod-reader", subjects: [{ kind: "ServiceAccount", name: "api", namespace: "default" }], rules: [{ verbs: ["get", "list"], resources: ["pods"], apiGroups: [""] }] });
+  eq("p9b2: rbac role and binding", [rbac.includes("kind: Role\n"), rbac.includes("kind: RoleBinding"), rbac.includes("name: pod-reader"), rbac.includes('verbs: ["get", "list"]')], [true, true, true, true]);
+  throws("p9b2: rbac rejects empty rules", () => buildRbacBinding({ kind: "Role", name: "x", subjects: [{ kind: "User", name: "alice" }], rules: [] }));
+  throws("p9b2: rbac rejects bad subject kind", () => buildRbacBinding({ kind: "Role", name: "x", subjects: [{ kind: "Robot" as never, name: "r2d2" }], rules: [{ verbs: ["get"], resources: ["pods"], apiGroups: [""] }] }));
+
+  const values = buildHelmValues({ releaseName: "web", namespace: "apps", replicas: 3, imageRepository: "nginx", imageTag: "1.25", serviceType: "ClusterIP", servicePort: 8080 });
+  eq("p9b2: helm values fields", [values.includes("replicaCount: 3"), values.includes("repository: nginx"), values.includes("tag: 1.25"), values.includes("type: ClusterIP"), values.includes("port: 8080")], [true, true, true, true, true]);
+  throws("p9b2: helm rejects bad service type", () => buildHelmValues({ releaseName: "w", namespace: "apps", replicas: 1, imageRepository: "nginx", imageTag: "1", serviceType: "ExternalName" as never, servicePort: 80 }));
+  throws("p9b2: helm rejects zero replicas", () => buildHelmValues({ releaseName: "w", namespace: "apps", replicas: 0, imageRepository: "nginx", imageTag: "1", serviceType: "ClusterIP", servicePort: 80 }));
+}
+
 
 
 
