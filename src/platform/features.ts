@@ -17,7 +17,8 @@ export type FeatureFlag =
   | "prometheus_tools"
   | "loki_tools"
   | "observability_tools"
-  | "cloud_tools";
+  | "cloud_tools"
+  | "api_testing";
 
 export const FEATURE_FLAGS: Readonly<Record<FeatureFlag, boolean>> = Object.freeze({
   new_search: true,
@@ -35,6 +36,7 @@ export const FEATURE_FLAGS: Readonly<Record<FeatureFlag, boolean>> = Object.free
   loki_tools: true,
   observability_tools: true,
   cloud_tools: true,
+  api_testing: true,
 });
 
 const limits = (values: Partial<Record<LimitKey, number | null>>): Record<LimitKey, number | null> => ({

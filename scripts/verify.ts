@@ -36,8 +36,9 @@ import { parseTraceparent, buildTraceparent, inspectSpan, buildCollectorConfig, 
 import { buildCloudWatchQuery, buildCloudWatchAlarm, inspectTerraformPlan, buildRbacBinding, buildHelmValues } from "../src/lib/cloud-iac";
 import { validateNginxConfig, validateApacheConfig, reviewIamPolicy, lintPromQl } from "../src/lib/config-validators";
 import { validateOpenApi as validateOpenApiDoc, listOpenApiOperations, lintGraphQL, inspectHar, evaluateAssertions } from "../src/lib/api-testing";
-import type { AuthProvider, PinnedToolsRepository } from "../src/platform/contracts";
+import { interpolate, parseHeaderLines, buildRequestUrl, buildRequestHeaders, buildRequestBody, summarizeResponse, emptyRequest } from "../src/lib/api-client";
 import { classifyRoute } from "../src/lib/routes";
+import type { AuthProvider, PinnedToolsRepository } from "../src/platform/contracts";
 
 let pass = 0, fail = 0;
 function eq(name: string, a: unknown, b: unknown) {
@@ -753,6 +754,29 @@ eq("AWS search", searchTools("aws arn", 20).some((hit) => hit.tool.id === "aws-a
   eq("p10b1: assertions evaluate", [results.length, results[0].passed, results[1].passed, results[2].passed, results[3].passed], [4, true, true, true, false]);
   throws("p10b1: assertions require at least one", () => evaluateAssertions({ status: 200, assertions: [] }));
 }
+// --- P10 B2: request builder lib + routing ---
+{
+  const HB = "{" + "{host}" + "}";
+  const TB = "{" + "{token}" + "}";
+  eq("p10b2: interpolate substitutes known vars", interpolate("https://" + HB + "/x", { host: "api.example.com" }), "https://api.example.com/x");
+  eq("p10b2: interpolate leaves unknown vars", interpolate("Bearer " + TB, {}), "Bearer " + TB);
+  eq("p10b2: parseHeaderLines splits name and value", parseHeaderLines("Authorization: Bearer x\n# comment\n\nContent-Type: application/json"), [{ name: "Authorization", value: "Bearer x" }, { name: "Content-Type", value: "application/json" }]);
+  throws("p10b2: parseHeaderLines rejects missing colon", () => parseHeaderLines("Authorization Bearer x"));
+  eq("p10b2: buildRequestUrl appends query", buildRequestUrl({ ...emptyRequest(), url: "https://api.example.com/users", query: [{ name: "limit", value: "10" }] }, {}), "https://api.example.com/users?limit=10");
+  throws("p10b2: buildRequestUrl rejects non-http schemes", () => buildRequestUrl({ ...emptyRequest(), url: "ftp://example.com" }, {}));
+  throws("p10b2: buildRequestUrl rejects empty URL", () => buildRequestUrl({ ...emptyRequest(), url: "  " }, {}));
+  eq("p10b2: bearer auth header built", buildRequestHeaders({ ...emptyRequest(), url: "https://api.example.com", auth: { type: "bearer", token: TB } }, { token: "abc" })[0], { name: "Authorization", value: "Bearer abc" });
+  throws("p10b2: bearer without token fails", () => buildRequestHeaders({ ...emptyRequest(), url: "https://x.com", auth: { type: "bearer" } }, {}));
+  eq("p10b2: basic auth header built", buildRequestHeaders({ ...emptyRequest(), url: "https://api.example.com", auth: { type: "basic", username: "u", password: "p" } }, {})[0].name, "Authorization");
+  eq("p10b2: apikey auth uses custom header", buildRequestHeaders({ ...emptyRequest(), url: "https://x.com", auth: { type: "apikey", token: "k", headerName: "X-Api-Key-Custom" } }, {})[0].name, "X-Api-Key-Custom");
+  throws("p10b2: GET with body rejected", () => buildRequestBody({ ...emptyRequest(), method: "GET", url: "https://x.com", body: "data" }, {}));
+  throws("p10b2: bad JSON body rejected", () => buildRequestBody({ ...emptyRequest(), method: "POST", url: "https://x.com", body: "{bad" }, {}));
+  const summary = summarizeResponse({ status: 200, statusText: "OK", ok: true, headers: { "content-type": "application/json" }, bodyText: '{"ok":true}', durationMs: 42 });
+  eq("p10b2: response summary fields", [summary.status, summary.ok, summary.contentType, summary.bodyPreview], [200, true, "application/json", '{"ok":true}']);
+  eq("p10b2: route classifier knows api-testing", classifyRoute("/api-testing", true, true).kind, "api_testing");
+  eq("p10b2: route classifier 404s when disabled", classifyRoute("/api-testing", true, false).kind, "not-found");
+}
+
 
 
 

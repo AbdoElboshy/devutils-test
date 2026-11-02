@@ -24,6 +24,7 @@ import { TextTool, TimestampTool, TimezoneTool, DateCalcTool } from "./tools/too
 import { PhpSerializeTool, HtmlToJsxTool, ColorConvertTool, MarkdownTool, UlidTool, BaseConvertTool } from "./tools/tool-phase7";
 import { LogsTool } from "./tools/tool-logs";
 import { WorkflowsPage } from "./pages/workflows";
+import { ApiTestingPage } from "./pages/api-testing";
 import { WORKFLOW_TEMPLATES } from "./data/workflows";
 import { ApiSchemaTool } from "./tools/tool-api-schema";
 import { isFeatureEnabled } from "./platform/features";
@@ -67,7 +68,7 @@ const TOOL_ICONS: Record<string, typeof Braces> = {
   loki: TerminalSquare, observability: Gauge, cloud: Cloud, infrastructure: Boxes,
 };
 
-const LOCAL_ROUTES = new Set(["/tools", "/devops", "/workflows", "/categories", "/about", "/admin", "/login", "/signup", "/forgot-password", "/reset-password", "/verify-email", "/account"]);
+const LOCAL_ROUTES = new Set(["/tools", "/api-testing", "/devops", "/workflows", "/categories", "/about", "/admin", "/login", "/signup", "/forgot-password", "/reset-password", "/verify-email", "/account"]);
 
 /** Consumes ?auth_next= exactly once so a reload cannot pin the user to it. */
 function consumeAuthNext(): string | null {
@@ -101,6 +102,7 @@ function titleFor(route: string): string {
   if (route.startsWith("/account")) return "Account — DevUtils";
   if (route.startsWith("/admin")) return "Administration — DevUtils";
   if (route === "/workflows") return "Local developer workflows — DevUtils";
+  if (route === "/api-testing") return "API request builder — DevUtils";
   if (route.startsWith("/categories/")) {
     const c = getCategory(route.split("/")[2]);
     if (c) return `${c.name} tools — DevUtils`;
@@ -153,7 +155,7 @@ export default function App() {
     document.title = title;
     const meta = document.querySelector('meta[name="description"]');
     const t = ROUTE_MAP[route];
-    const description = t?.longDescription ?? (route === "/workflows" ? "Run and save local developer workflows that connect deterministic DevUtils operations." : "Tiny technical problems solved instantly with fast, local-first developer tools.");
+    const description = t?.longDescription ?? (route === "/workflows" ? "Run and save local developer workflows that connect deterministic DevUtils operations." : route === "/api-testing" ? "Build, send and inspect HTTP requests directly from your browser." : "Tiny technical problems solved instantly with fast, local-first developer tools.");
     if (meta) meta.setAttribute("content", description);
     const upsertMeta = (selector: string, attribute: "name" | "property", key: string, content: string) => {
       let element = document.querySelector<HTMLMetaElement>(selector);
@@ -228,6 +230,7 @@ function RouteView({ route, onNav, onSearch }: { route: string; onNav: (p: strin
     case "home": return <Home onNav={onNav} onSearch={onSearch} />;
     case "tools": return <AllTools onNav={onNav} />;
     case "workflows": return <WorkflowsPage onNav={onNav} />;
+    case "api_testing": return <ApiTestingPage onNav={onNav} />;
     case "auth": return <AuthPage mode={c.mode} onNav={onNav} />;
     case "admin": return <AdminPage section={c.section} onNav={onNav} />;
     case "account": return <AccountPage section={c.section} onNav={onNav} />;

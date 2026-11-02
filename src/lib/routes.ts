@@ -27,6 +27,7 @@ export type RouteClassification =
   | { kind: "home" }
   | { kind: "tools" }
   | { kind: "workflows" }
+  | { kind: "api_testing" }
   | { kind: "auth"; mode: "login" | "signup" | "forgot" | "reset" | "verify" }
   | { kind: "admin"; section: AdminSection }
   | { kind: "account"; section: AccountSection }
@@ -38,12 +39,14 @@ export type RouteClassification =
 export function classifyRoute(
   route: string,
   workflowsEnabled: boolean = isFeatureEnabled("workflows"),
+  apiTestingEnabled: boolean = isFeatureEnabled("api_testing"),
 ): RouteClassification {
   const tool = ROUTE_MAP[route];
   if (tool) return { kind: "tool", id: tool.id };
   if (route === "/") return { kind: "home" };
   if (route === "/tools") return { kind: "tools" };
   if (route === "/workflows") return workflowsEnabled ? { kind: "workflows" } : { kind: "not-found" };
+  if (route === "/api-testing") return apiTestingEnabled ? { kind: "api_testing" } : { kind: "not-found" };
   const auth = AUTH_ROUTES[route];
   if (auth) return { kind: "auth", mode: auth };
   if (route === "/admin" || route.startsWith("/admin/")) {
