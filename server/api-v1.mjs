@@ -22,6 +22,9 @@ try {
 }
 
 import { upstreamStatus } from "./lib.mjs";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 /* ---------- pure helpers (unit-tested in scripts/test-server.mjs) ---------- */
 
@@ -117,6 +120,14 @@ export function mountApiV1(app, { service, usage, planOf }) {
   const usageStore = usage ?? createMemoryUsage();
   const planLimitOf = planOf ?? (async () => "free");
 
+/* Public and unauthenticated: the OpenAPI document for this gateway.
+     Loaded once at mount; the route answers 503 if the file is missing. */
+  let openApiDoc = "";
+  try {
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    openApiDoc = readFileSync(path.join(root, "docs", "api-v1.openapi.json"), "utf-8");
+  } catch { openApiDoc = ""; }
+
   async function loadKey(secret) {
     const hash = hashApiKey(secret);
     const r = await service.from("api_keys").select("id,user_id,scopes,revoked_at").eq("key_hash", hash).maybeSingle();
@@ -151,6 +162,12 @@ export function mountApiV1(app, { service, usage, planOf }) {
   app.options("/api/v1/operations", (_req, res) => { corsHeaders(res); res.status(204).end(); });
   app.options("/api/v1/operations/:id/execute", (_req, res) => { corsHeaders(res); res.status(204).end(); });
   app.options("/api/v1/usage", (_req, res) => { corsHeaders(res); res.status(204).end(); });
+
+  app.get("/api/v1/openapi.json", (_req, res) => {
+    corsHeaders(res);
+    if (!openApiDoc) return res.status(503).json({ error: "OpenAPI document unavailable." });
+    res.type("application/json").send(openApiDoc);
+  });
 
   app.get("/api/v1/operations", async (req, res) => {
     const key = await authenticate(req, res, "tools:read");
