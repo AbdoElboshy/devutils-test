@@ -1206,7 +1206,31 @@ app.put("/api/admin/flags/:key", requireRole("admin"), async (req, res) => {
   }
 });
 
-mountApiV1(app, { service });
+mountApiV1(app, {
+  service,
+  /* DB-backed monthly usage counter (sub-track B batch 2). Writes to
+     usage_records (metric "api_requests") — the same rows the account
+     Usage page summarizes — so gateway traffic is restart-proof and
+     visible in the UI. Best-effort: a failed counter write must not
+     fail the API request that earned it. */
+  usage: {
+    async read(userId) {
+      const since = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString();
+      const r = await service.from("usage_records").select("quantity").eq("user_id", userId).eq("metric", "api_requests").gte("recorded_at", since);
+      if (r.error) throw r.error;
+      return (r.data ?? []).reduce((sum, row) => sum + Number(row.quantity ?? 0), 0);
+    },
+    async count(userId) {
+      const r = await service.from("usage_records").insert({ user_id: userId, metric: "api_requests", quantity: 1, resource_id: "api:v1" });
+      if (r.error) console.error("[DevUtils] /api/v1 usage write failed:", r.error.code ?? r.error.message);
+    },
+  },
+  planOf: async (userId) => {
+    const r = await service.from("profiles").select("plan_id").eq("user_id", userId).maybeSingle();
+    if (r.error) { console.error("[DevUtils] /api/v1 plan lookup failed:", r.error.code ?? r.error.message); return "free"; }
+    return r.data?.plan_id ?? "free";
+  },
+});
 
 app.use("/api", (_req, res) => res.status(404).json({ error: "API route not found." }));
 app.use(express.static(dist, { index: false, maxAge: production ? "1h" : 0, etag: true }));
