@@ -418,9 +418,10 @@ ok("checkMonthlyQuota blocks at limit", () => {
   assert.equal(q.limit, 1000);
 });
 ok("checkMonthlyQuota treats null as unlimited", () => assert.equal(checkMonthlyQuota(null, 999999).ok, true));
-ok("apiV1ErrorStatus maps NOT_FOUND to 404", () => assert.equal(apiV1ErrorStatus({ name: "NOT_FOUND" }), 404));
-ok("apiV1ErrorStatus maps LIMIT_EXCEEDED to 413", () => assert.equal(apiV1ErrorStatus({ name: "LIMIT_EXCEEDED" }), 413));
+ok("apiV1ErrorStatus maps AppError NOT_FOUND to 404", () => assert.equal(apiV1ErrorStatus({ code: "NOT_FOUND", name: "AppError" }), 404));
+ok("apiV1ErrorStatus maps AppError LIMIT_EXCEEDED to 413", () => assert.equal(apiV1ErrorStatus({ code: "LIMIT_EXCEEDED", name: "AppError" }), 413));
 ok("apiV1ErrorStatus maps validation to 400", () => assert.equal(apiV1ErrorStatus(new Error("Input must be valid JSON.")), 400));
+ok("apiV1ErrorStatus maps AppError INVALID_INPUT to 400", () => assert.equal(apiV1ErrorStatus({ code: "INVALID_INPUT", name: "AppError" }), 400));
 ok("apiV1ErrorStatus maps unknown to 500", () => assert.equal(apiV1ErrorStatus(new Error("boom")), 500));
 ok("API_V1_PLAN_LIMITS mirrors features.ts", () => assert.deepEqual({ ...API_V1_PLAN_LIMITS }, { anonymous: 0, free: 1000, pro: 50000, team: 250000, enterprise: null }));
 

@@ -76,9 +76,10 @@ export function checkMonthlyQuota(planLimit, usedThisMonth) {
 
 /** Map AppError-like executor failures to public /api/v1 status codes. */
 export function apiV1ErrorStatus(error) {
-  const name = error?.name ?? "";
-  if (name === "NOT_FOUND") return 404;
-  if (name === "LIMIT_EXCEEDED") return 413;
+  const code = String(error?.code ?? error?.name ?? "");
+  if (code === "NOT_FOUND") return 404;
+  if (code === "LIMIT_EXCEEDED") return 413;
+  if (code === "INVALID_INPUT" || code === "NETWORK_REQUIRED") return 400;
   const message = String(error?.message ?? "");
   if (/must be|required|invalid/i.test(message)) return 400;
   return 500;
