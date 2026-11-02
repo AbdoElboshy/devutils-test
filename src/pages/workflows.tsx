@@ -9,6 +9,7 @@ import { TOOL_MAP } from "../lib/registry";
 import { validateSteps, serializeWorkflowExport, parseWorkflowExport, MAX_WORKFLOW_STEPS } from "../lib/workflow-io";
 import { snapshotVersion, listVersions, clearVersions, type WorkflowVersionRecord } from "../lib/workflow-versions";
 import { recordRun, listRuns, clearRuns, type WorkflowRunLog } from "../lib/workflow-history";
+import { quotaStatus, quotaLabel, type QuotaStatus } from "../lib/quota";
 import { downloadFile } from "../lib/engine";
 import { Btn, CodeArea, CopyBtn, ErrorCallout, Panel, PrivacyBadge, TextInput } from "../components/ui";
 import { cn } from "../utils/cn";
@@ -30,6 +31,7 @@ export function WorkflowsPage({ onNav }: { onNav: (route: string) => void }) {
   const [draftDescription, setDraftDescription] = useState("");
   const [versions, setVersions] = useState<WorkflowVersionRecord[]>([]);
   const [runs, setRuns] = useState<WorkflowRunLog[]>([]);
+  const [quota, setQuota] = useState<QuotaStatus[]>([]);
 
   const knownOperationIds = useMemo(() => operations.list().map((op) => op.id), []);
   const selected = useMemo<SavedWorkflow>(() => {
@@ -43,6 +45,12 @@ export function WorkflowsPage({ onNav }: { onNav: (route: string) => void }) {
   useEffect(() => platform.favorites.subscribe((items) => setFavoriteIds(items.filter((item) => item.kind === "workflow").map((item) => item.targetId))), []);
   useEffect(() => { setVersions(listVersions(selected.id)); }, [selected.id, saved]);
   useEffect(() => { setRuns(listRuns(selected.id)); }, [selected.id]);
+  useEffect(() => {
+    if (!auth.user || !platform.usage) return;
+    void platform.usage.summary()
+      .then((summary) => setQuota(quotaStatus({ savedWorkflows: saved.length, workflowRuns: summary.workflowRuns, apiRequests: summary.apiRequests }, auth.user?.planId ?? null)))
+      .catch(() => setQuota([]));
+  }, [auth.user?.id, saved.length]);
 
   const choose = (workflow: SavedWorkflow, template?: WorkflowTemplate) => {
     setSelectedId(workflow.id);
@@ -177,6 +185,13 @@ export function WorkflowsPage({ onNav }: { onNav: (route: string) => void }) {
           </p>
         </div>
         <PrivacyBadge local />
+        {quota.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {quota.map((entry) => (
+              <span key={entry.metric} className={cn("rounded-full border px-2 py-0.5 text-[10.5px] font-medium", entry.kind === "over" ? "border-red-300 bg-red-50 text-red-600 dark:border-red-900 dark:bg-red-950/40 dark:text-red-400" : entry.kind === "near" ? "border-amber-300 bg-amber-50 text-amber-600 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-400" : "border-zinc-200 bg-zinc-50 text-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400")}>{quotaLabel(entry)}</span>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="mt-6 grid gap-4 lg:grid-cols-[300px_1fr]">

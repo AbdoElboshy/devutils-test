@@ -15,7 +15,11 @@ export type AccountSection = "dashboard" | "profile" | "favorites" | "workflows"
 const sections: { id: AccountSection; label: string; icon: typeof Gauge }[] = [
   { id: "dashboard", label: "Dashboard", icon: Gauge }, { id: "profile", label: "Profile", icon: UserRound },
   { id: "favorites", label: "Favorites", icon: Star }, { id: "workflows", label: "Workflows", icon: WorkflowIcon },
-  { id: "presets", label: "Presets", icon: Bookmark }, { id: "collections", label: "Collections", icon: FolderOpen }, { id: "settings", label: "Settings", icon: Settings },
+  { id: "presets", label: "Presets", icon: Bookmark },
+  { id: "api-keys", label: "API keys", icon: KeyRound },
+  { id: "usage", label: "Usage", icon: Gauge },
+  { id: "billing", label: "Billing", icon: Shield },
+  { id: "security", label: "Security", icon: AlertTriangle }, { id: "collections", label: "Collections", icon: FolderOpen }, { id: "settings", label: "Settings", icon: Settings },
 ];
 
 const emptyUsage = (): UsageSummary => ({ toolRuns: 0, workflowRuns: 0, apiRequests: 0, integrationCalls: 0, periodStart: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString() });

@@ -31,6 +31,7 @@ import { validateSteps, serializeWorkflowExport, parseWorkflowExport } from "../
 import { snapshotVersion, listVersions, clearVersions, clearAllVersions } from "../src/lib/workflow-versions";
 import type { WorkflowRun } from "../src/platform/workflows";
 import { recordRun, listRuns, clearRuns, clearAllRuns } from "../src/lib/workflow-history";
+import { quotaStatus, quotaLabel } from "../src/lib/quota";
 import type { AuthProvider, PinnedToolsRepository } from "../src/platform/contracts";
 import { classifyRoute } from "../src/lib/routes";
 
@@ -604,6 +605,26 @@ eq("AWS search", searchTools("aws arn", 20).some((hit) => hit.tool.id === "aws-a
   clearAllRuns();
   eq("p8b3: clearAll empties history", listRuns("wf-other").length, 0);
 }
+
+// --- P8 B4: quota awareness formatting ---
+{
+  const counts = { savedWorkflows: 0, workflowRuns: 0, apiRequests: 0 };
+  const anon = quotaStatus(counts, "anonymous");
+  eq("p8b4: anonymous saved workflows limit is 12", anon.find((e) => e.metric === "workflows saved")!.limit, 12);
+  eq("p8b4: anonymous api requests limit is 0 (api disabled)", anon.find((e) => e.metric === "API requests")!.limit, 0);
+  eq("p8b4: workflow runs have no cap", anon.find((e) => e.metric === "workflow runs")!.limit, null);
+  const free = quotaStatus({ ...counts, savedWorkflows: 10 }, "free");
+  eq("p8b4: free saved workflows limit is 25", free.find((e) => e.metric === "workflows saved")!.limit, 25);
+  eq("p8b4: 10/25 is ok", free.find((e) => e.metric === "workflows saved")!.kind, "ok");
+  const near = quotaStatus({ ...counts, savedWorkflows: 21 }, "free");
+  eq("p8b4: 21/25 crosses near threshold", near.find((e) => e.metric === "workflows saved")!.kind, "near");
+  const over = quotaStatus({ ...counts, savedWorkflows: 25 }, "free");
+  eq("p8b4: 25/25 is over", over.find((e) => e.metric === "workflows saved")!.kind, "over");
+  const pro = quotaStatus({ ...counts, savedWorkflows: 900 }, "pro");
+  eq("p8b4: pro saved workflows unlimited", pro.find((e) => e.metric === "workflows saved")!.limit, null);
+  eq("p8b4: uncapped label formatting", quotaLabel({ metric: "workflow runs", used: 900, limit: null, kind: "ok" }).includes("no cap"), true);
+}
+
 
 
 
