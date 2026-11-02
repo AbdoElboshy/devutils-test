@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "test:server": "node scripts/test-server.mjs",
     "test:favorites": "tsx scripts/test-favorites.ts",
-    "build:server-ops": "node scripts/build-server-ops.mjs"
+    "build:server-ops": "node scripts/build-server-ops.mjs",
+    "smoke:api-v1": "node scripts/smoke-api-v1.mjs"
   },
   "dependencies": {
     "@noble/hashes": "^2.4.0",
