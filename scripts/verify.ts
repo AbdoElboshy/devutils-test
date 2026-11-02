@@ -638,7 +638,7 @@ eq("AWS search", searchTools("aws arn", 20).some((hit) => hit.tool.id === "aws-a
 
   const span = { traceId: "4bf92f3577b34da6a3ce929d0e0e4736", spanId: "00f067aa0ba902b7", name: "GET /users", kind: "SPAN_KIND_SERVER", status: { code: "STATUS_CODE_OK" }, startTimeUnixNano: 1000000000, endTimeUnixNano: 2000000000, attributes: [{ key: "http.method", value: { stringValue: "GET" } }] };
   const summary = inspectSpan(span);
-  eq("p9b1: span inspector summarizes", [summary.valid, summary.name, summary.kind, summary.status, summary.durationMs, summary.attributes], [true, "GET /users", "server", "OK", 1, 1]);
+  eq("p9b1: span inspector summarizes", [summary.valid, summary.name, summary.kind, summary.status, summary.durationMs, summary.attributes], [true, "GET /users", "server", "OK", 1000, 1]);
   eq("p9b1: span inspector flags invalid ids", inspectSpan({ name: "x" }).valid, false);
 
   const config = buildCollectorConfig({ otlpGrpcPort: 4317, otlpHttpPort: 4318, prometheusExporter: true, prometheusPort: 8889, debugExporter: false });
