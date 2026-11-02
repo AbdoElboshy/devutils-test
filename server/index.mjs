@@ -102,7 +102,12 @@ app.use((_req, res, next) => {
   next();
 });
 app.use(compression());
-app.use(express.json({ limit: "1mb", strict: true }));
+app.use((req, res, next) => {
+  // Strict (objects/arrays only) for every route, EXCEPT /api/v1: public
+  // operation inputs may be top-level JSON primitives (strings, numbers,
+  // booleans) — e.g. base64.encode takes a raw JSON string body.
+  express.json({ limit: "1mb", strict: !req.path.startsWith("/api/v1/") })(req, res, next);
+});
 app.use(cookieParser());
 
 const authLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 40, standardHeaders: "draft-7", legacyHeaders: false, message: { error: "Too many authentication requests. Try again later." } });
