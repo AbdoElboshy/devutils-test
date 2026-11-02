@@ -32,6 +32,7 @@ import { snapshotVersion, listVersions, clearVersions, clearAllVersions } from "
 import type { WorkflowRun } from "../src/platform/workflows";
 import { recordRun, listRuns, clearRuns, clearAllRuns } from "../src/lib/workflow-history";
 import { quotaStatus, quotaLabel } from "../src/lib/quota";
+import { parseTraceparent, buildTraceparent, inspectSpan, buildCollectorConfig, buildPostmortem } from "../src/lib/otel";
 import type { AuthProvider, PinnedToolsRepository } from "../src/platform/contracts";
 import { classifyRoute } from "../src/lib/routes";
 
@@ -624,6 +625,35 @@ eq("AWS search", searchTools("aws arn", 20).some((hit) => hit.tool.id === "aws-a
   eq("p8b4: pro saved workflows unlimited", pro.find((e) => e.metric === "workflows saved")!.limit, null);
   eq("p8b4: uncapped label formatting", quotaLabel({ metric: "workflow runs", used: 900, limit: null, kind: "ok" }).includes("no cap"), true);
 }
+
+// --- P9 B1: OpenTelemetry + incident tooling ---
+{
+  const tp = parseTraceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01");
+  eq("p9b1: traceparent parses", [tp.version, tp.traceId.length, tp.parentId.length, tp.flags], ["00", 32, 16, "01"]);
+  eq("p9b1: traceparent round-trips", buildTraceparent("4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7", "01"), "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01");
+  throws("p9b1: traceparent rejects wrong field count", () => parseTraceparent("00-abc-01"));
+  throws("p9b1: traceparent rejects all-zero trace id", () => parseTraceparent("00-00000000000000000000000000000000-00f067aa0ba902b7-01"));
+  throws("p9b1: traceparent rejects uppercase hex", () => parseTraceparent("00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01"));
+  throws("p9b1: traceparent rejects ff version", () => parseTraceparent("ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"));
+
+  const span = { traceId: "4bf92f3577b34da6a3ce929d0e0e4736", spanId: "00f067aa0ba902b7", name: "GET /users", kind: "SPAN_KIND_SERVER", status: { code: "STATUS_CODE_OK" }, startTimeUnixNano: 1000000000, endTimeUnixNano: 2000000000, attributes: [{ key: "http.method", value: { stringValue: "GET" } }] };
+  const summary = inspectSpan(span);
+  eq("p9b1: span inspector summarizes", [summary.valid, summary.name, summary.kind, summary.status, summary.durationMs, summary.attributes], [true, "GET /users", "server", "OK", 1, 1]);
+  eq("p9b1: span inspector flags invalid ids", inspectSpan({ name: "x" }).valid, false);
+
+  const config = buildCollectorConfig({ otlpGrpcPort: 4317, otlpHttpPort: 4318, prometheusExporter: true, prometheusPort: 8889, debugExporter: false });
+  eq("p9b1: collector config grpc endpoint", config.includes("0.0.0.0:4317"), true);
+  eq("p9b1: collector config prometheus exporter", config.includes("prometheus"), true);
+  throws("p9b1: collector config rejects bad port", () => buildCollectorConfig({ otlpGrpcPort: 0, otlpHttpPort: 4318, prometheusExporter: true, prometheusPort: 8889, debugExporter: false }));
+  throws("p9b1: collector config requires exporter", () => buildCollectorConfig({ otlpGrpcPort: 4317, otlpHttpPort: 4318, prometheusExporter: false, prometheusPort: 0, debugExporter: false }));
+
+  const pm = buildPostmortem({ title: "API latency spike", severity: "sev2", timeline: [{ time: "09:12", event: "Latency crossed 2s p95" }, { time: "09:40", event: "Root cause found" }], impact: "Slow responses for 12% of users", rootCause: "Connection-pool exhaustion", resolution: "Raised pool size", actionItems: ["Add pool alerts", "Document playbook"] });
+  eq("p9b1: postmortem has severity header", pm.includes("**Severity:** SEV2 - major"), true);
+  eq("p9b1: postmortem renders timeline", [pm.includes("- **09:12** - Latency crossed 2s p95"), pm.includes("- **09:40** - Root cause found")], [true, true]);
+  eq("p9b1: postmortem renders action items", [pm.includes("- [ ] Add pool alerts"), pm.includes("- [ ] Document playbook")], [true, true]);
+  throws("p9b1: postmortem requires timeline", () => buildPostmortem({ title: "x", severity: "sev3", timeline: [], impact: "", rootCause: "", resolution: "", actionItems: [] }));
+}
+
 
 
 

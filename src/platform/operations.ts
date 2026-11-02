@@ -16,6 +16,7 @@ import { curlToPython, k8sDeployment, parseCurl } from "../lib/blueprints";
 import { AppError } from "./errors";
 import { extractLogErrors, formatLogs } from "../lib/logs";
 import { buildLogQl, buildPromQl, calculateSlo, grafanaPanel, zabbixExpression, zabbixTrigger, type PromQueryInput } from "../lib/devops-platform";
+import { buildCollectorConfig, buildPostmortem, inspectSpan, parseTraceparent, type CollectorConfigInput, type PostmortemInput } from "../lib/otel";
 import type { ToolOperation, ToolOperationRegistry } from "./contracts";
 
 const encoder = new TextEncoder();
@@ -67,6 +68,11 @@ export const operations = new InMemoryToolOperationRegistry()
   .register({ id: "grafana.panel-from-query", title: "Generate Grafana panel", description: "Wrap a query in a Grafana time-series panel.", clientSide: true, run: (input) => JSON.stringify(grafanaPanel({ title: "Generated query", type: "timeseries", query: asText(input), legend: "{{instance}}", unit: "short", warning: 70, critical: 90 }), null, 2) })
   .register({ id: "loki.query", title: "Build LogQL", description: "Build LogQL from selector/filter configuration.", clientSide: true, run: (input) => buildLogQl(asObject(input) as never) })
   .register({ id: "observability.slo", title: "Calculate SLO budget", description: "Calculate downtime and request error budget.", clientSide: true, run: (input) => calculateSlo(asObject(input) as never) })
+  .register({ id: "otel.traceparent", title: "Parse traceparent", description: "Validate and decode a W3C traceparent header.", clientSide: true, run: (input) => parseTraceparent(asText(input)) })
+  .register({ id: "otel.collector-config", title: "Build OTel collector config", description: "Generate an OpenTelemetry Collector YAML config from structured input.", clientSide: true, run: (input) => buildCollectorConfig(asObject(input) as unknown as CollectorConfigInput) })
+  .register({ id: "otel.span-inspector", title: "Inspect OTLP span", description: "Validate an OTLP/JSON span and summarize trace id, span id, duration and attributes.", clientSide: true, run: (input) => inspectSpan(asObject(input)) })
+  .register({ id: "incident.postmortem", title: "Build postmortem", description: "Generate an incident postmortem document from structured input.", clientSide: true, run: (input) => buildPostmortem(asObject(input) as unknown as PostmortemInput) })
+  .register({ id: "incident.timeline", title: "Build incident timeline", description: "Format a list of timestamped events into a clean incident timeline.", clientSide: true, run: (input) => { const value = asObject(input); const entries = Array.isArray(value.entries) ? value.entries : []; return buildPostmortem({ title: String(value.title ?? "Incident"), severity: "sev3", timeline: entries.map((entry) => ({ time: String((entry as Record<string, unknown>).time ?? ""), event: String((entry as Record<string, unknown>).event ?? "") })), impact: "", rootCause: "", resolution: "", actionItems: [] }); } })
   .register({ id: "zabbix.expression", title: "Build Zabbix expression", description: "Convert a common requirement to an expression.", clientSide: true, run: (input) => { const value = asObject(input); return zabbixExpression(String(value.kind ?? "cpu") as "cpu", { host: String(value.host ?? "Template Linux"), threshold: Number(value.threshold ?? 80), duration: String(value.duration ?? "5m") }); } })
   .register({ id: "zabbix.trigger", title: "Build Zabbix trigger", description: "Generate trigger JSON from an expression.", clientSide: true, run: (input) => JSON.stringify(zabbixTrigger({ name: "Generated trigger", expression: asText(input), severity: "HIGH", recovery: "", tags: "source=devutils" }), null, 2) })
   .register({
