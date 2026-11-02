@@ -19,6 +19,7 @@ import { buildLogQl, buildPromQl, calculateSlo, grafanaPanel, zabbixExpression, 
 import { buildCollectorConfig, buildPostmortem, inspectSpan, parseTraceparent, type CollectorConfigInput, type PostmortemInput } from "../lib/otel";
 import { buildCloudWatchAlarm, buildCloudWatchQuery, buildHelmValues, buildRbacBinding, inspectTerraformPlan, type CloudWatchAlarmInput, type CloudWatchQueryInput, type HelmValuesInput, type RbacBindingInput } from "../lib/cloud-iac";
 import { lintPromQl, reviewIamPolicy, validateApacheConfig, validateNginxConfig } from "../lib/config-validators";
+import { evaluateAssertions, inspectHar, lintGraphQL, listOpenApiOperations, validateOpenApi } from "../lib/api-testing";
 import type { ToolOperation, ToolOperationRegistry } from "./contracts";
 
 const encoder = new TextEncoder();
@@ -84,6 +85,11 @@ export const operations = new InMemoryToolOperationRegistry()
   .register({ id: "apache.validate", title: "Validate Apache config", description: "Check Apache configuration for mismatched or unclosed tags.", clientSide: true, maximumInputBytes: 5_000_000, run: (input) => validateApacheConfig(asText(input)) })
   .register({ id: "iam.review", title: "Review IAM policy", description: "Review an IAM policy document for wildcards and privileged grants.", clientSide: true, maximumInputBytes: 5_000_000, run: (input) => reviewIamPolicy(asObject(input)) })
   .register({ id: "promql.lint", title: "Lint PromQL", description: "Check a PromQL expression for unbalanced braces, bad ranges and common mistakes.", clientSide: true, run: (input) => lintPromQl(asText(input)) })
+  .register({ id: "openapi.validate", title: "Validate OpenAPI", description: "Structurally validate an OpenAPI 3.x / Swagger 2.0 document.", clientSide: true, maximumInputBytes: 5_000_000, run: (input) => validateOpenApi(asObject(input)) })
+  .register({ id: "openapi.requests", title: "List OpenAPI operations", description: "List methods, paths and operationIds from an OpenAPI document for request generation.", clientSide: true, maximumInputBytes: 5_000_000, run: (input) => listOpenApiOperations(asObject(input)) })
+  .register({ id: "graphql.lint", title: "Lint GraphQL", description: "Check a GraphQL query or mutation for balance and variable-declaration errors.", clientSide: true, run: (input) => lintGraphQL(asText(input)) })
+  .register({ id: "har.inspect", title: "Inspect HAR", description: "Summarize requests from a HAR file with credential headers flagged (values never echoed).", clientSide: true, maximumInputBytes: 5_000_000, run: (input) => inspectHar(asObject(input)) })
+  .register({ id: "api.assert", title: "Evaluate API assertions", description: "Run status/body/JSON-path assertions against a captured response.", clientSide: true, run: (input) => evaluateAssertions(asObject(input) as never) })
   .register({ id: "zabbix.expression", title: "Build Zabbix expression", description: "Convert a common requirement to an expression.", clientSide: true, run: (input) => { const value = asObject(input); return zabbixExpression(String(value.kind ?? "cpu") as "cpu", { host: String(value.host ?? "Template Linux"), threshold: Number(value.threshold ?? 80), duration: String(value.duration ?? "5m") }); } })
   .register({ id: "zabbix.trigger", title: "Build Zabbix trigger", description: "Generate trigger JSON from an expression.", clientSide: true, run: (input) => JSON.stringify(zabbixTrigger({ name: "Generated trigger", expression: asText(input), severity: "HIGH", recovery: "", tags: "source=devutils" }), null, 2) })
   .register({

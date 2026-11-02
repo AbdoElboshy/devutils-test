@@ -35,6 +35,7 @@ import { quotaStatus, quotaLabel } from "../src/lib/quota";
 import { parseTraceparent, buildTraceparent, inspectSpan, buildCollectorConfig, buildPostmortem } from "../src/lib/otel";
 import { buildCloudWatchQuery, buildCloudWatchAlarm, inspectTerraformPlan, buildRbacBinding, buildHelmValues } from "../src/lib/cloud-iac";
 import { validateNginxConfig, validateApacheConfig, reviewIamPolicy, lintPromQl } from "../src/lib/config-validators";
+import { validateOpenApi as validateOpenApiDoc, listOpenApiOperations, lintGraphQL, inspectHar, evaluateAssertions } from "../src/lib/api-testing";
 import type { AuthProvider, PinnedToolsRepository } from "../src/platform/contracts";
 import { classifyRoute } from "../src/lib/routes";
 
@@ -719,6 +720,40 @@ eq("AWS search", searchTools("aws arn", 20).some((hit) => hit.tool.id === "aws-a
   eq("p9b3: promql lint catches quantile out of range", lintPromQl("histogram_quantile(1.5, sum by (le) (rate(x[5m])))").issues.some((i) => i.message.includes("between 0 and 1")), true);
   throws("p9b3: promql lint rejects empty input", () => lintPromQl(" "));
 }
+
+// --- P10 B1: OpenAPI / GraphQL / HAR / assertions ---
+{
+  const spec = { openapi: "3.0.0", info: { title: "Users", version: "1.0.0" }, paths: { "/users": { get: { operationId: "listUsers", responses: { "200": { description: "ok" } } }, post: { operationId: "createUser", responses: { "201": { description: "created" } } } } } };
+  eq("p10b1: openapi valid spec passes", validateOpenApiDoc(spec).ok, true);
+  eq("p10b1: openapi catches missing responses", validateOpenApiDoc({ openapi: "3.0.0", info: { title: "t", version: "1" }, paths: { "/users": { get: {} } } }).issues.some((i) => i.message.includes("responses")), true);
+  eq("p10b1: openapi catches path without slash", validateOpenApiDoc({ openapi: "3.0.0", info: { title: "t", version: "1" }, paths: { "users": { get: { responses: { "200": { description: "ok" } } } } } }).issues.some((i) => i.message.includes("must start with '/'")), true);
+  eq("p10b1: openapi rejects swagger 2.1", validateOpenApiDoc({ swagger: "2.1", info: { title: "t", version: "1" }, paths: {} }).issues.some((i) => i.message.includes("2.0")), true);
+  const ops = listOpenApiOperations(spec);
+  eq("p10b1: openapi lists operations", [ops.length, ops[0].method, ops[0].operationId, ops[1].method, ops[1].operationId], [2, "GET", "listUsers", "POST", "createUser"]);
+
+  eq("p10b1: graphql lint passes valid query", lintGraphQL("query User($id: ID!) { user(id: $id) { name } }").ok, true);
+  eq("p10b1: graphql lint catches undeclared variable", lintGraphQL("query { user(id: $id) { name } }").issues.some((i) => i.message.includes("never declared")), true);
+  eq("p10b1: graphql lint catches unbalanced braces", lintGraphQL("query { user { name }").issues.some((i) => i.message.includes("braces")), true);
+
+  const har = { log: { entries: [
+    { request: { method: "GET", url: "https://api.example.com/users", headers: [{ name: "Accept", value: "application/json" }] } },
+    { request: { method: "POST", url: "https://api.example.com/users", headers: [{ name: "Authorization", value: "Bearer SECRET" }] } },
+  ] } };
+  const harResult = inspectHar(har);
+  eq("p10b1: har inspects requests", [harResult.requests.length, harResult.requests[0].method, harResult.requests[1].url], [2, "GET", "https://api.example.com/users"]);
+  eq("p10b1: har flags credential headers with warning", [harResult.requests[1].hasCredentialHeaders, harResult.warning !== null], [true, true]);
+  eq("p10b1: har summary never echoes header values", JSON.stringify(harResult).includes("SECRET"), false);
+
+  const results = evaluateAssertions({ status: 200, body: { user: { id: 42, name: "maya" } }, assertions: [
+    { kind: "statusEquals", expected: 200 },
+    { kind: "bodyContains", expected: "maya" },
+    { kind: "jsonPathEquals", expected: "user.id", actual: 42 },
+    { kind: "jsonPathEquals", expected: "user.name", actual: "someone-else" },
+  ] });
+  eq("p10b1: assertions evaluate", [results.length, results[0].passed, results[1].passed, results[2].passed, results[3].passed], [4, true, true, true, false]);
+  throws("p10b1: assertions require at least one", () => evaluateAssertions({ status: 200, assertions: [] }));
+}
+
 
 
 
