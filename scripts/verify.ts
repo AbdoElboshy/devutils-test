@@ -34,6 +34,7 @@ import { recordRun, listRuns, clearRuns, clearAllRuns } from "../src/lib/workflo
 import { quotaStatus, quotaLabel } from "../src/lib/quota";
 import { parseTraceparent, buildTraceparent, inspectSpan, buildCollectorConfig, buildPostmortem } from "../src/lib/otel";
 import { buildCloudWatchQuery, buildCloudWatchAlarm, inspectTerraformPlan, buildRbacBinding, buildHelmValues } from "../src/lib/cloud-iac";
+import { validateNginxConfig, validateApacheConfig, reviewIamPolicy, lintPromQl } from "../src/lib/config-validators";
 import type { AuthProvider, PinnedToolsRepository } from "../src/platform/contracts";
 import { classifyRoute } from "../src/lib/routes";
 
@@ -688,6 +689,37 @@ eq("AWS search", searchTools("aws arn", 20).some((hit) => hit.tool.id === "aws-a
   throws("p9b2: helm rejects bad service type", () => buildHelmValues({ releaseName: "w", namespace: "apps", replicas: 1, imageRepository: "nginx", imageTag: "1", serviceType: "ExternalName" as never, servicePort: 80 }));
   throws("p9b2: helm rejects zero replicas", () => buildHelmValues({ releaseName: "w", namespace: "apps", replicas: 0, imageRepository: "nginx", imageTag: "1", serviceType: "ClusterIP", servicePort: 80 }));
 }
+
+// --- P9 B3: Nginx / Apache / IAM review / PromQL lint ---
+{
+  const nginxOk = validateNginxConfig("server {\n  listen 80;\n  server_name example.com;\n  location / {\n    proxy_pass http://app;\n  }\n}\n");
+  eq("p9b3: nginx valid config passes", nginxOk.ok, true);
+  const nginxBad = validateNginxConfig("server {\n  listen 80\n  server_name example.com\n}\n}\n");
+  eq("p9b3: nginx catches missing semicolons and extra brace", [nginxBad.ok, nginxBad.issues.some((i) => i.message.includes("';'")), nginxBad.issues.some((i) => i.message.includes("Unbalanced"))], [false, true, true]);
+  throws("p9b3: nginx rejects empty input", () => validateNginxConfig("   "));
+
+  const apacheOk = validateApacheConfig("<VirtualHost *:80>\n  ServerName example.com\n</VirtualHost>\n");
+  eq("p9b3: apache valid config passes", apacheOk.ok, true);
+  const apacheBad = validateApacheConfig("<Directory /var/www>\n  AllowOverride None\n</Location>\n");
+  eq("p9b3: apache catches mismatched tags", [apacheBad.ok, apacheBad.issues.some((i) => i.message.includes("does not match"))], [false, true]);
+  eq("p9b3: apache catches unclosed tag", validateApacheConfig("<IfModule mod_rewrite.c>\n  RewriteEngine On\n").issues.some((i) => i.message.includes("Unclosed tag")), true);
+
+  const review = reviewIamPolicy({ Statement: [
+    { Effect: "Allow", Action: ["s3:GetObject"], Resource: "arn:aws:s3:::bucket/*" },
+    { Effect: "Allow", Action: ["*"], Resource: "*" },
+  ] });
+  eq("p9b3: iam review counts statements and finds dangers", [review.statementCount, review.ok, review.findings.some((f) => f.severity === "danger" && f.statement === 2)], [2, false, true]);
+  eq("p9b3: iam review leaves scoped statements clean", review.findings.some((f) => f.statement === 1 && f.severity === "danger"), false);
+  throws("p9b3: iam review rejects non-policy input", () => reviewIamPolicy({}));
+
+  eq("p9b3: promql lint passes valid expression", lintPromQl('sum(rate(http_requests_total{job="api"}[5m])) by (job)').ok, true);
+  const promBad = lintPromQl('rate(http_requests_total{job="api"}');
+  eq("p9b3: promql lint catches unbalanced parens and braces", [promBad.ok, promBad.issues.some((i) => i.message.includes("parentheses")), promBad.issues.some((i) => i.message.includes("matchers"))], [false, true, true]);
+  eq("p9b3: promql lint catches bad range unit", lintPromQl("rate(x[5mins])").issues.some((i) => i.message.includes("Unknown range unit")), true);
+  eq("p9b3: promql lint catches quantile out of range", lintPromQl("histogram_quantile(1.5, sum by (le) (rate(x[5m])))").issues.some((i) => i.message.includes("between 0 and 1")), true);
+  throws("p9b3: promql lint rejects empty input", () => lintPromQl(" "));
+}
+
 
 
 

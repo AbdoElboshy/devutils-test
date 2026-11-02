@@ -18,6 +18,7 @@ import { extractLogErrors, formatLogs } from "../lib/logs";
 import { buildLogQl, buildPromQl, calculateSlo, grafanaPanel, zabbixExpression, zabbixTrigger, type PromQueryInput } from "../lib/devops-platform";
 import { buildCollectorConfig, buildPostmortem, inspectSpan, parseTraceparent, type CollectorConfigInput, type PostmortemInput } from "../lib/otel";
 import { buildCloudWatchAlarm, buildCloudWatchQuery, buildHelmValues, buildRbacBinding, inspectTerraformPlan, type CloudWatchAlarmInput, type CloudWatchQueryInput, type HelmValuesInput, type RbacBindingInput } from "../lib/cloud-iac";
+import { lintPromQl, reviewIamPolicy, validateApacheConfig, validateNginxConfig } from "../lib/config-validators";
 import type { ToolOperation, ToolOperationRegistry } from "./contracts";
 
 const encoder = new TextEncoder();
@@ -79,6 +80,10 @@ export const operations = new InMemoryToolOperationRegistry()
   .register({ id: "terraform.plan-summary", title: "Summarize Terraform plan", description: "Inspect a 'terraform show -json' plan and summarize creates, updates, deletes and replacements.", clientSide: true, maximumInputBytes: 5_000_000, run: (input) => inspectTerraformPlan(asObject(input)) })
   .register({ id: "kubernetes.rbac", title: "Build RBAC Role and Binding", description: "Generate a Kubernetes Role/ClusterRole plus matching Binding YAML from validated subjects and rules.", clientSide: true, run: (input) => buildRbacBinding(asObject(input) as unknown as RbacBindingInput) })
   .register({ id: "helm.values", title: "Build Helm values", description: "Generate a conventional values.yaml from validated replicas, image and service settings.", clientSide: true, run: (input) => buildHelmValues(asObject(input) as unknown as HelmValuesInput) })
+  .register({ id: "nginx.validate", title: "Validate nginx config", description: "Check nginx configuration for unbalanced braces and missing semicolons.", clientSide: true, maximumInputBytes: 5_000_000, run: (input) => validateNginxConfig(asText(input)) })
+  .register({ id: "apache.validate", title: "Validate Apache config", description: "Check Apache configuration for mismatched or unclosed tags.", clientSide: true, maximumInputBytes: 5_000_000, run: (input) => validateApacheConfig(asText(input)) })
+  .register({ id: "iam.review", title: "Review IAM policy", description: "Review an IAM policy document for wildcards and privileged grants.", clientSide: true, maximumInputBytes: 5_000_000, run: (input) => reviewIamPolicy(asObject(input)) })
+  .register({ id: "promql.lint", title: "Lint PromQL", description: "Check a PromQL expression for unbalanced braces, bad ranges and common mistakes.", clientSide: true, run: (input) => lintPromQl(asText(input)) })
   .register({ id: "zabbix.expression", title: "Build Zabbix expression", description: "Convert a common requirement to an expression.", clientSide: true, run: (input) => { const value = asObject(input); return zabbixExpression(String(value.kind ?? "cpu") as "cpu", { host: String(value.host ?? "Template Linux"), threshold: Number(value.threshold ?? 80), duration: String(value.duration ?? "5m") }); } })
   .register({ id: "zabbix.trigger", title: "Build Zabbix trigger", description: "Generate trigger JSON from an expression.", clientSide: true, run: (input) => JSON.stringify(zabbixTrigger({ name: "Generated trigger", expression: asText(input), severity: "HIGH", recovery: "", tags: "source=devutils" }), null, 2) })
   .register({
