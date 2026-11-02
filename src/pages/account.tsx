@@ -65,7 +65,14 @@ export function AccountPage({ section, onNav }: { section: AccountSection; onNav
 
   useEffect(() => { void load(); }, [load]);
 
-  if (!auth.enabled) return <AccountUnavailable onNav={onNav} />;
+  const refreshKeys = useCallback(async () => {
+    const user = auth.user;
+    if (!user) return;
+    try { setKeys(await (platform.apiKeys?.list() ?? [])); }
+    catch { /* keep the current list; a full reload will surface errors */ }
+  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+
+if (!auth.enabled) return <AccountUnavailable onNav={onNav} />;
   if (auth.loading) return <div className="mx-auto max-w-6xl px-4 py-20 text-center text-sm text-zinc-500">Checking your session…</div>;
   if (!auth.user) return <ProtectedAccountEmpty onNav={onNav} />;
 
@@ -90,7 +97,7 @@ export function AccountPage({ section, onNav }: { section: AccountSection; onNav
               {section === "workflows" && <WorkflowsSection workflows={workflows} onNav={onNav} onChanged={load} />}
               {section === "presets" && <PresetsSection presets={presets} onChanged={load} />}
               {section === "collections" && <CollectionsSection collections={collections} onReload={load} />}
-              {section === "api-keys" && <ApiKeysSection userId={auth.user.id} keys={keys} onChanged={load} />}
+              {section === "api-keys" && <ApiKeysSection userId={auth.user.id} keys={keys} onChanged={refreshKeys} />}
               {section === "usage" && <UsageSection usage={usage} user={auth.user} />}
               {section === "billing" && <BillingSection plan={auth.user.planId} />}
               {(section === "security" || section === "settings") && <SettingsSection profile={profile} onNav={onNav} />}
