@@ -1,3 +1,4 @@
+import { mountApiV1 } from "./api-v1.mjs";
 import compression from "compression";
 import cookieParser from "cookie-parser";
 import express from "express";
@@ -1200,7 +1201,7 @@ app.put("/api/admin/flags/:key", requireRole("admin"), async (req, res) => {
   }
 });
 
-import("./api-v1.mjs").then(({ mountApiV1 }) => mountApiV1(app, { service })).catch((error) => console.error("[DevUtils] /api/v1 mount failed:", error instanceof Error ? error.message : error));
+mountApiV1(app, { service });
 
 app.use("/api", (_req, res) => res.status(404).json({ error: "API route not found." }));
 app.use(express.static(dist, { index: false, maxAge: production ? "1h" : 0, etag: true }));

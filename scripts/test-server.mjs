@@ -382,8 +382,6 @@ ok("valid collection item accepted", () => assert.deepEqual(safeCollectionItemIn
 ok("invalid collection item kind rejected", () => assert.equal(safeCollectionItemInput({ kind: "widget", targetId: "json" }), null));
 ok("collection item without target rejected", () => assert.equal(safeCollectionItemInput({ kind: "tool", targetId: "" }), null));
 
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
 
 /* ---------------- Phase 10 API v1: auth, rate limit, quota, errors ---------------- */
 import {
@@ -425,3 +423,6 @@ ok("apiV1ErrorStatus maps LIMIT_EXCEEDED to 413", () => assert.equal(apiV1ErrorS
 ok("apiV1ErrorStatus maps validation to 400", () => assert.equal(apiV1ErrorStatus(new Error("Input must be valid JSON.")), 400));
 ok("apiV1ErrorStatus maps unknown to 500", () => assert.equal(apiV1ErrorStatus(new Error("boom")), 500));
 ok("API_V1_PLAN_LIMITS mirrors features.ts", () => assert.deepEqual({ ...API_V1_PLAN_LIMITS }, { anonymous: 0, free: 1000, pro: 50000, team: 250000, enterprise: null }));
+
+console.log(`\n${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);
