@@ -29,6 +29,8 @@ import { operations } from "../src/platform/operations";
 import { parsePresetExport } from "../src/lib/preset-io";
 import { validateSteps, serializeWorkflowExport, parseWorkflowExport } from "../src/lib/workflow-io";
 import { snapshotVersion, listVersions, clearVersions, clearAllVersions } from "../src/lib/workflow-versions";
+import type { WorkflowRun } from "../src/platform/workflows";
+import { recordRun, listRuns, clearRuns, clearAllRuns } from "../src/lib/workflow-history";
 import type { AuthProvider, PinnedToolsRepository } from "../src/platform/contracts";
 import { classifyRoute } from "../src/lib/routes";
 
@@ -571,6 +573,38 @@ eq("AWS search", searchTools("aws arn", 20).some((hit) => hit.tool.id === "aws-a
   clearAllVersions();
   eq("p8b2: clearAllVersions empties history", listVersions("wf-other").length, 0);
 }
+
+// --- P8 B3: workflow run history - privacy-safe, no payloads ---
+{
+  clearAllRuns();
+  const run = {
+    workflowId: "wf-h",
+    startedAt: "2026-01-01T00:00:01.000Z",
+    completedAt: "2026-01-01T00:00:02.000Z",
+    steps: [
+      { step: { id: "v", operationId: "json.validate", label: "Validate" }, output: "supersecret-output-value", durationMs: 5 },
+      { step: { id: "f", operationId: "json.format", label: "Format" }, output: { nested: "data" }, durationMs: 7 },
+    ],
+    output: "final-secret-payload",
+  } as unknown as WorkflowRun;
+  recordRun({ workflowId: "wf-h", workflowName: "History test", run });
+  recordRun({ workflowId: "wf-h", workflowName: "History test", failure: "Step 2 exploded" });
+  const logs = listRuns("wf-h");
+  eq("p8b3: failure recorded newest-first", [logs.length, logs[0]!.success, logs[1]!.success], [2, false, true]);
+  eq("p8b3: step labels and durations kept", logs[1]!.steps.map((entry) => entry.label), ["Validate", "Format"]);
+  eq("p8b3: total duration summed", logs[1]!.durationMs, 12);
+  eq("p8b3: no output payload persisted", JSON.stringify(logs).includes("secret"), false);
+  eq("p8b3: failure message persisted", logs[0]!.failure ?? "", "Step 2 exploded");
+  recordRun({ workflowId: "wf-other", workflowName: "Other", failure: "x" });
+  eq("p8b3: per-workflow filter", listRuns("wf-h").length, 2);
+  for (let i = 0; i < 60; i++) recordRun({ workflowId: "wf-cap", workflowName: "Cap", failure: "x" });
+  eq("p8b3: history capped at 50", listRuns("wf-cap").length, 50);
+  clearRuns("wf-h");
+  eq("p8b3: clear removes only target", [listRuns("wf-h").length, listRuns("wf-other").length], [0, 1]);
+  clearAllRuns();
+  eq("p8b3: clearAll empties history", listRuns("wf-other").length, 0);
+}
+
 
 
 

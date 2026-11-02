@@ -8,6 +8,7 @@ import { useAuth } from "../platform/auth-context";
 import { TOOL_MAP } from "../lib/registry";
 import { validateSteps, serializeWorkflowExport, parseWorkflowExport, MAX_WORKFLOW_STEPS } from "../lib/workflow-io";
 import { snapshotVersion, listVersions, clearVersions, type WorkflowVersionRecord } from "../lib/workflow-versions";
+import { recordRun, listRuns, clearRuns, type WorkflowRunLog } from "../lib/workflow-history";
 import { downloadFile } from "../lib/engine";
 import { Btn, CodeArea, CopyBtn, ErrorCallout, Panel, PrivacyBadge, TextInput } from "../components/ui";
 import { cn } from "../utils/cn";
@@ -28,6 +29,7 @@ export function WorkflowsPage({ onNav }: { onNav: (route: string) => void }) {
   const [draftName, setDraftName] = useState("");
   const [draftDescription, setDraftDescription] = useState("");
   const [versions, setVersions] = useState<WorkflowVersionRecord[]>([]);
+  const [runs, setRuns] = useState<WorkflowRunLog[]>([]);
 
   const knownOperationIds = useMemo(() => operations.list().map((op) => op.id), []);
   const selected = useMemo<SavedWorkflow>(() => {
@@ -40,6 +42,7 @@ export function WorkflowsPage({ onNav }: { onNav: (route: string) => void }) {
   useEffect(() => platform.workflows.subscribe(setSaved), []);
   useEffect(() => platform.favorites.subscribe((items) => setFavoriteIds(items.filter((item) => item.kind === "workflow").map((item) => item.targetId))), []);
   useEffect(() => { setVersions(listVersions(selected.id)); }, [selected.id, saved]);
+  useEffect(() => { setRuns(listRuns(selected.id)); }, [selected.id]);
 
   const choose = (workflow: SavedWorkflow, template?: WorkflowTemplate) => {
     setSelectedId(workflow.id);
@@ -145,9 +148,17 @@ export function WorkflowsPage({ onNav }: { onNav: (route: string) => void }) {
     setError("");
     setRun(null);
     try {
-      setRun(await executeWorkflow(selected, input));
+      const result = await executeWorkflow(selected, input);
+      setRun(result);
+      recordRun({ workflowId: selected.id, workflowName: selected.name, run: result });
+      setRuns(listRuns(selected.id));
       if (auth.user && platform.usage) void platform.usage.consume(auth.user.id, "workflow_runs", 1, selected.id).catch(() => undefined);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Workflow failed."); }
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "Workflow failed.";
+      setError(message);
+      recordRun({ workflowId: selected.id, workflowName: selected.name, failure: message });
+      setRuns(listRuns(selected.id));
+    }
     finally { setRunning(false); }
   };
 
@@ -210,6 +221,24 @@ export function WorkflowsPage({ onNav }: { onNav: (route: string) => void }) {
               </div>
             </Panel>
           )}
+        {runs.length > 0 && (
+          <Panel className="p-3">
+            <div className="flex items-center justify-between px-1">
+              <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-400">Run history</p>
+              <button type="button" className="text-[10px] text-zinc-400 hover:text-red-500" onClick={() => { clearRuns(selected.id); setRuns([]); }}>Clear</button>
+            </div>
+            <div className="mt-2 space-y-1">
+              {runs.map((record) => (
+                <div key={record.id} className="flex items-center gap-1.5 px-2 py-1 text-[11.5px]">
+                  <span className={cn(record.success ? "text-emerald-500" : "text-red-500")}>{record.success ? <Check size={12} /> : <X size={12} />}</span>
+                  <span className="flex-1 truncate text-zinc-500">{new Date(record.completedAt).toLocaleTimeString()} · {(record.durationMs / 1000).toFixed(2)}s · {record.steps.length} steps</span>
+                  <span title={record.failure ?? ""} className="max-w-24 truncate font-mono text-[10px] text-zinc-400">{record.success ? "ok" : "failed"}</span>
+                </div>
+              ))}
+            </div>
+            <p className="mt-2 px-1 text-[10px] text-zinc-400">Timestamps and durations only. Inputs and outputs are never recorded.</p>
+          </Panel>
+        )}
         </aside>
 
         <Panel className="p-4 sm:p-5">
