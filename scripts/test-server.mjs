@@ -384,3 +384,44 @@ ok("collection item without target rejected", () => assert.equal(safeCollectionI
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
+
+/* ---------------- Phase 10 API v1: auth, rate limit, quota, errors ---------------- */
+import {
+  parseBearer, hashApiKey, authzKey, allowRate, checkMonthlyQuota, apiV1ErrorStatus, API_V1_PLAN_LIMITS,
+} from "../server/api-v1.mjs";
+
+ok("parseBearer accepts a du_live key", () => assert.equal(parseBearer("Bearer du_live_abc123"), "du_live_abc123"));
+ok("parseBearer rejects a non-du_live token", () => assert.equal(parseBearer("Bearer sk_abc123"), null));
+ok("parseBearer rejects a missing header", () => assert.equal(parseBearer(undefined), null));
+ok("hashApiKey hashes deterministically", () => assert.equal(hashApiKey("du_live_x"), hashApiKey("du_live_x")));
+ok("hashApiKey differs per key", () => assert.notEqual(hashApiKey("du_live_x"), hashApiKey("du_live_y")));
+ok("authzKey accepts a valid key with the right scope", () => {
+  const v = authzKey({ id: 1, user_id: "u1", scopes: ["tools:read", "tools:execute"], revoked_at: null }, "tools:execute");
+  assert.equal(v.status, 0);
+  assert.equal(v.key.userId, "u1");
+});
+ok("authzKey 401s on an unknown key", () => assert.equal(authzKey(null, "tools:read").status, 401));
+ok("authzKey 401s on a revoked key", () => assert.equal(authzKey({ id: 1, scopes: ["tools:read"], revoked_at: "2026-01-01" }, "tools:read").status, 401));
+ok("authzKey 403s on a wrong scope", () => assert.equal(authzKey({ id: 1, scopes: ["tools:read"], revoked_at: null }, "tools:execute").status, 403));
+ok("allowRate permits up to the window max", () => {
+  const id = `k${Date.now()}`;
+  for (let i = 0; i < 30; i++) assert.equal(allowRate(id, 1000 + i).ok, true);
+  assert.equal(allowRate(id, 2000).ok, false);
+});
+ok("allowRate window slides", () => {
+  const id = `k2${Date.now()}`;
+  for (let i = 0; i < 30; i++) allowRate(id, 1000 + i);
+  assert.equal(allowRate(id, 61000).ok, true);
+});
+ok("checkMonthlyQuota allows under limit", () => assert.equal(checkMonthlyQuota(1000, 999).ok, true));
+ok("checkMonthlyQuota blocks at limit", () => {
+  const q = checkMonthlyQuota(1000, 1000);
+  assert.equal(q.ok, false);
+  assert.equal(q.limit, 1000);
+});
+ok("checkMonthlyQuota treats null as unlimited", () => assert.equal(checkMonthlyQuota(null, 999999).ok, true));
+ok("apiV1ErrorStatus maps NOT_FOUND to 404", () => assert.equal(apiV1ErrorStatus({ name: "NOT_FOUND" }), 404));
+ok("apiV1ErrorStatus maps LIMIT_EXCEEDED to 413", () => assert.equal(apiV1ErrorStatus({ name: "LIMIT_EXCEEDED" }), 413));
+ok("apiV1ErrorStatus maps validation to 400", () => assert.equal(apiV1ErrorStatus(new Error("Input must be valid JSON.")), 400));
+ok("apiV1ErrorStatus maps unknown to 500", () => assert.equal(apiV1ErrorStatus(new Error("boom")), 500));
+ok("API_V1_PLAN_LIMITS mirrors features.ts", () => assert.deepEqual({ ...API_V1_PLAN_LIMITS }, { anonymous: 0, free: 1000, pro: 50000, team: 250000, enterprise: null }));

@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && npm run build:server-ops",
     "preview": "vite preview",
     "test:server": "node scripts/test-server.mjs",
-    "test:favorites": "tsx scripts/test-favorites.ts"
+    "test:favorites": "tsx scripts/test-favorites.ts",
+    "build:server-ops": "node scripts/build-server-ops.mjs"
   },
   "dependencies": {
     "@noble/hashes": "^2.4.0",
