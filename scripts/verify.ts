@@ -713,7 +713,7 @@ eq("AWS search", searchTools("aws arn", 20).some((hit) => hit.tool.id === "aws-a
   throws("p9b3: iam review rejects non-policy input", () => reviewIamPolicy({}));
 
   eq("p9b3: promql lint passes valid expression", lintPromQl('sum(rate(http_requests_total{job="api"}[5m])) by (job)').ok, true);
-  const promBad = lintPromQl('rate(http_requests_total{job="api"}');
+  const promBad = lintPromQl('rate(http_requests_total{job="api"');
   eq("p9b3: promql lint catches unbalanced parens and braces", [promBad.ok, promBad.issues.some((i) => i.message.includes("parentheses")), promBad.issues.some((i) => i.message.includes("matchers"))], [false, true, true]);
   eq("p9b3: promql lint catches bad range unit", lintPromQl("rate(x[5mins])").issues.some((i) => i.message.includes("Unknown range unit")), true);
   eq("p9b3: promql lint catches quantile out of range", lintPromQl("histogram_quantile(1.5, sum by (le) (rate(x[5m])))").issues.some((i) => i.message.includes("between 0 and 1")), true);
