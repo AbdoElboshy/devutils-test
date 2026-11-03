@@ -51,20 +51,62 @@ export function authzKey(row, requiredScope) {
   return { status: 0, key: { id: row.id, userId: row.user_id, scopes: row.scopes } };
 }
 
-/** In-memory sliding-window rate limiter (per key): 30 requests / minute. */
-const buckets = new Map(); // keyId -> timestamps
-const WINDOW_MS = 60_000;
-const WINDOW_MAX = 30;
+/* Sliding-window rate limiter (per key): 30 requests / minute.
+   DB-backed when a store is injected (restart-proof); the in-memory map
+   remains the fallback when no store is injected or the store fails. */
+export const RATE_WINDOW_MS = 60_000;
+export const RATE_WINDOW_MAX = 30;
+const buckets = new Map(); // keyId -> timestamps (fallback path only)
 
 export function allowRate(keyId, now = Date.now()) {
-  const hits = (buckets.get(keyId) ?? []).filter((t) => now - t < WINDOW_MS);
-  if (hits.length >= WINDOW_MAX) {
+  const hits = (buckets.get(keyId) ?? []).filter((t) => now - t < RATE_WINDOW_MS);
+  if (hits.length >= RATE_WINDOW_MAX) {
     buckets.set(keyId, hits);
-    return { ok: false, retryAfterMs: WINDOW_MS - (now - hits[0]) };
+    return { ok: false, retryAfterMs: RATE_WINDOW_MS - (now - hits[0]) };
   }
   hits.push(now);
   buckets.set(keyId, hits);
   return { ok: true };
+}
+
+/** Pure sliding-window verdict from counted hits. Unit-tested. */
+export function decideRate(hitCount, oldestHitAtMs, now = Date.now()) {
+  if (hitCount >= RATE_WINDOW_MAX) {
+    const age = Number.isFinite(oldestHitAtMs) ? now - oldestHitAtMs : 0;
+    return { ok: false, retryAfterMs: Math.min(RATE_WINDOW_MS, Math.max(1000, RATE_WINDOW_MS - age)) };
+  }
+  return { ok: true };
+}
+
+/** DB-backed sliding window with an injectable store:
+      count(keyId, sinceIso)   -> hits inside the window
+      oldest(keyId, sinceIso)  -> oldest in-window hit ISO ts, or null
+      record(keyId, atIso)     -> persist a new hit
+      prune(beforeIso)         -> optional cleanup of stale rows
+    Fail-open: with no store, or on any store error, fall back to the
+    in-memory limiter so a DB hiccup never becomes a gateway outage. */
+export async function rateVerdict(store, keyId, now = Date.now()) {
+  const id = String(keyId);
+  if (!store) return allowRate(id, now);
+  const sinceIso = new Date(now - RATE_WINDOW_MS).toISOString();
+  try {
+    const hitCount = Number(await store.count(id, sinceIso) ?? 0);
+    const oldestIso = await store.oldest(id, sinceIso);
+    const verdict = decideRate(hitCount, oldestIso ? Date.parse(oldestIso) : NaN, now);
+    if (!verdict.ok) return verdict;
+    await store.record(id, new Date(now).toISOString());
+    maybeRatePrune(store, now);
+    return verdict;
+  } catch {
+    return allowRate(id, now);
+  }
+}
+
+let ratePruneAt = 0;
+function maybeRatePrune(store, now) {
+  if (now - ratePruneAt < RATE_WINDOW_MS) return;
+  ratePruneAt = now;
+  Promise.resolve(store.prune?.(new Date(now - 10 * RATE_WINDOW_MS).toISOString())).catch(() => {});
 }
 
 /** Monthly quota check against a plan limit. null/undefined = unlimited. */
@@ -116,8 +158,9 @@ function corsHeaders(res) {
   });
 }
 
-export function mountApiV1(app, { service, usage, planOf }) {
+export function mountApiV1(app, { service, usage, planOf, rate }) {
   const usageStore = usage ?? createMemoryUsage();
+  const rateStore = rate ?? null;
   const planLimitOf = planOf ?? (async () => "free");
 
 /* Public and unauthenticated: the OpenAPI document for this gateway.
@@ -200,7 +243,7 @@ export function mountApiV1(app, { service, usage, planOf }) {
     if (!key) return;
     corsHeaders(res);
 
-    const rate = allowRate(key.id);
+    const rate = await rateVerdict(rateStore, key.id);
     if (!rate.ok) return res.status(429).set("Retry-After", String(Math.ceil(rate.retryAfterMs / 1000))).json({ error: "Rate limit exceeded: 30 requests per minute per key." });
 
     if (!executeOperation) return res.status(503).json({ error: "Executor unavailable. Run 'npm run build:server-ops' and restart." });

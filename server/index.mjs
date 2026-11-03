@@ -1225,6 +1225,30 @@ mountApiV1(app, {
       if (r.error) console.error("[DevUtils] /api/v1 usage write failed:", r.error.code ?? r.error.message);
     },
   },
+  /* DB-backed sliding-window rate limiter for /api/v1 execute (p11).
+     One row per accepted execute; rows older than the 60s window are pruned
+     opportunistically (at most once a minute). Fail-open: on any DB error
+     the gateway falls back to the in-memory limiter, never to a hard outage. */
+  rate: {
+    async count(keyId, sinceIso) {
+      const r = await service.from("rate_limit_hits").select("hit_at", { count: "exact", head: true }).eq("key_id", keyId).gte("hit_at", sinceIso);
+      if (r.error) throw r.error;
+      return r.count ?? 0;
+    },
+    async oldest(keyId, sinceIso) {
+      const r = await service.from("rate_limit_hits").select("hit_at").eq("key_id", keyId).gte("hit_at", sinceIso).order("hit_at", { ascending: true }).limit(1);
+      if (r.error) throw r.error;
+      return r.data?.[0]?.hit_at ?? null;
+    },
+    async record(keyId, atIso) {
+      const r = await service.from("rate_limit_hits").insert({ key_id: keyId, hit_at: atIso });
+      if (r.error) throw r.error;
+    },
+    async prune(beforeIso) {
+      const r = await service.from("rate_limit_hits").delete().lt("hit_at", beforeIso);
+      if (r.error) throw r.error;
+    },
+  },
   planOf: async (userId) => {
     const r = await service.from("profiles").select("plan_id").eq("user_id", userId).maybeSingle();
     if (r.error) { console.error("[DevUtils] /api/v1 plan lookup failed:", r.error.code ?? r.error.message); return "free"; }
