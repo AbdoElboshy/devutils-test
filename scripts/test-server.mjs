@@ -5,6 +5,7 @@
  *   node scripts/test-server.mjs
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   ANALYTICS_EVENTS,
   isAllowedOrigin,
@@ -423,7 +424,23 @@ ok("apiV1ErrorStatus maps AppError LIMIT_EXCEEDED to 413", () => assert.equal(ap
 ok("apiV1ErrorStatus maps validation to 400", () => assert.equal(apiV1ErrorStatus(new Error("Input must be valid JSON.")), 400));
 ok("apiV1ErrorStatus maps AppError INVALID_INPUT to 400", () => assert.equal(apiV1ErrorStatus({ code: "INVALID_INPUT", name: "AppError" }), 400));
 ok("apiV1ErrorStatus maps unknown to 500", () => assert.equal(apiV1ErrorStatus(new Error("boom")), 500));
-ok("API_V1_PLAN_LIMITS mirrors features.ts", () => assert.deepEqual({ ...API_V1_PLAN_LIMITS }, { anonymous: 0, free: 1000, pro: 50000, team: 250000, enterprise: null }));
+ok("API_V1_PLAN_LIMITS has the expected gateway values", () => assert.deepEqual({ ...API_V1_PLAN_LIMITS }, { anonymous: 0, free: 1000, pro: 50000, team: 250000, enterprise: null }));
+ok("p11: gateway plan limits mirror src/platform/features.ts PLANS", () => {
+  // Plain node cannot import TypeScript, so the client PLANS table is read as
+  // text. A plan that does not override the limit inherits the limits() base
+  // default of 0; null means unlimited; 1_000-style separators are stripped.
+  const source = readFileSync(new URL("../src/platform/features.ts", import.meta.url), "utf-8");
+  const extracted = {};
+  for (const planId of ["anonymous", "free", "pro", "team", "enterprise"]) {
+    const start = source.indexOf(`id: "${planId}"`);
+    assert.ok(start >= 0, `features.ts must define the '${planId}' plan`);
+    const end = source.indexOf("\n  },", start);
+    const section = source.slice(start, end === -1 ? undefined : end);
+    const match = /api_requests_per_month:\s*([\d_]+|null)/.exec(section);
+    extracted[planId] = match ? (match[1] === "null" ? null : Number(match[1].replace(/_/g, ""))) : 0;
+  }
+  assert.deepEqual(extracted, { ...API_V1_PLAN_LIMITS });
+});
 
 ok("p10b2db: monthKey formats January", () => assert.equal(monthKey(new Date(Date.UTC(2026, 0, 15))), "2026-01"));
 ok("p10b2db: monthKey formats December", () => assert.equal(monthKey(new Date(Date.UTC(2026, 11, 31))), "2026-12"));
