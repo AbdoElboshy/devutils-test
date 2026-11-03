@@ -245,7 +245,7 @@ export function mountApiV1(app, { service, usage, planOf, rate, stats }) {
       const start = Date.now();
       res.on("finish", () => {
         try {
-          statsStore.hit({ endpoint: `${req.method} /api/v1${req.path}`.slice(0, 200), status: res.statusCode, durationMs: Math.max(0, Date.now() - start) });
+          statsStore.hit({ endpoint: `${req.method} ${req.baseUrl}${req.path}`.slice(0, 200), status: res.statusCode, durationMs: Math.max(0, Date.now() - start) });
         } catch { /* stats must never fail a response */ }
       });
       next();
