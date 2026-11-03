@@ -141,6 +141,29 @@ export function normalizePlanId(value) {
   return ["free", "pro", "team", "enterprise"].includes(plan) ? plan : null;
 }
 
+/** p12: team member limits by plan (mirrors src/platform/features.ts). */
+export const TEAM_MEMBER_LIMITS = Object.freeze({ free: 0, pro: 0, team: 25, enterprise: null });
+
+/** True when a plan may have team workspaces at all. */
+export function planAllowsTeams(planId) {
+  return planId === "team" || planId === "enterprise";
+}
+
+/** True when the NEXT member still fits. null limit = unlimited. */
+export function withinMemberLimit(planId, memberCount) {
+  const limit = TEAM_MEMBER_LIMITS[planId] ?? 0;
+  if (limit === null) return true;
+  return Number(memberCount ?? 0) < limit;
+}
+
+/** Removal hierarchy: owners remove anyone; admins remove members only.
+    (Self-leave is handled by the route, not this pure rule.) */
+export function canRemoveMember(actorRole, targetRole) {
+  if (actorRole === "owner") return true;
+  if (actorRole === "admin") return targetRole === "member";
+  return false;
+}
+
 /* ---------- in-memory usage counter (injectable for persistence later) ---------- */
 
 export function monthKey(date = new Date()) {

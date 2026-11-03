@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { AlertTriangle, Bookmark, Download, FolderOpen, Gauge, KeyRound, LogOut, Pin, Settings, Shield, Star, Trash2, Upload, UserRound, Workflow as WorkflowIcon } from "lucide-react";
+import { AlertTriangle, Bookmark, Download, FolderOpen, Gauge, KeyRound, LogOut, Pin, Settings, Shield, Star, Trash2, Upload, UserRound, Users, Workflow as WorkflowIcon } from "lucide-react";
 import { platform, type ApiKeyMetadata, type AuditLog, type Collection, type CollectionItem, type Favorite, type PinnedTool, type Profile, type SavedPreset, type SavedWorkflow, type UsageSummary, type User } from "../platform";
 import { useAuth } from "../platform/auth-context";
 import { TOOL_MAP, type Tool } from "../lib/registry";
@@ -9,8 +9,9 @@ import { Btn, Check, ErrorCallout, Field, Panel, Select, Stat, TextInput } from 
 import { AccountUnavailable } from "./auth";
 import { cn } from "../utils/cn";
 import { getPrivacyPreferences, setPrivacyPreferences } from "../platform/privacy";
+import { apiFetch } from "../platform/http";
 
-export type AccountSection = "dashboard" | "profile" | "favorites" | "workflows" | "presets" | "api-keys" | "usage" | "billing" | "security" | "settings" | "collections";
+export type AccountSection = "dashboard" | "profile" | "favorites" | "workflows" | "presets" | "api-keys" | "usage" | "billing" | "security" | "settings" | "collections" | "teams";
 
 const sections: { id: AccountSection; label: string; icon: typeof Gauge }[] = [
   { id: "dashboard", label: "Dashboard", icon: Gauge }, { id: "profile", label: "Profile", icon: UserRound },
@@ -19,7 +20,7 @@ const sections: { id: AccountSection; label: string; icon: typeof Gauge }[] = [
   { id: "api-keys", label: "API keys", icon: KeyRound },
   { id: "usage", label: "Usage", icon: Gauge },
   { id: "billing", label: "Billing", icon: Shield },
-  { id: "security", label: "Security", icon: AlertTriangle }, { id: "collections", label: "Collections", icon: FolderOpen }, { id: "settings", label: "Settings", icon: Settings },
+  { id: "security", label: "Security", icon: AlertTriangle }, { id: "collections", label: "Collections", icon: FolderOpen }, { id: "teams", label: "Teams", icon: Users }, { id: "settings", label: "Settings", icon: Settings },
 ];
 
 const emptyUsage = (): UsageSummary => ({ toolRuns: 0, workflowRuns: 0, apiRequests: 0, integrationCalls: 0, periodStart: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString() });
@@ -100,6 +101,7 @@ if (!auth.enabled) return <AccountUnavailable onNav={onNav} />;
               {section === "api-keys" && <ApiKeysSection userId={auth.user.id} keys={keys} onChanged={refreshKeys} />}
               {section === "usage" && <UsageSection usage={usage} user={auth.user} />}
               {section === "billing" && <BillingSection plan={auth.user.planId} apiLimit={platform.capabilities.getLimit(auth.user, "api_requests_per_month")} />}
+              {section === "teams" && <TeamsSection user={auth.user} />}
               {(section === "security" || section === "settings") && <SettingsSection profile={profile} onNav={onNav} />}
             </>
           )}
@@ -325,6 +327,62 @@ function UsageSection({ usage, user }: { usage: UsageSummary; user: User }) {
   const periodStart = new Date(usage.periodStart);
   const resetsOn = new Date(Date.UTC(periodStart.getUTCFullYear(), periodStart.getUTCMonth() + 1, 1)).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" });
   return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Usage since {new Date(usage.periodStart).toLocaleDateString()}</h2><p className="mt-1 text-[12.5px] text-zinc-500">Only operation names, IDs, counts and timestamps are recorded. Inputs and outputs are excluded.</p><p className="mt-1 text-[12.5px] text-zinc-500">Plan <span className="font-semibold capitalize">{user.planId}</span> · {remaining === null ? "unlimited API requests" : `${remaining.toLocaleString()} of ${(apiLimit ?? 0).toLocaleString()} API requests remaining`} this month · resets {resetsOn}.</p><div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-5"><Stat label="Tool runs" value={usage.toolRuns.toLocaleString()} /><Stat label="Workflow runs" value={usage.workflowRuns.toLocaleString()} /><Stat label="API requests" value={`${usage.apiRequests.toLocaleString()} / ${apiLimit ?? "∞"}`} /><Stat label="API remaining" value={remaining === null ? "∞" : remaining.toLocaleString()} /><Stat label="Integration calls" value={usage.integrationCalls.toLocaleString()} /></div></Panel>;
+}
+
+type TeamRow = { id: string; name: string; created_at: string; role: "owner" | "admin" | "member"; memberCount: number };
+
+function TeamsSection({ user }: { user: User }) {
+  const [teams, setTeams] = useState<TeamRow[]>([]);
+  const [name, setName] = useState("");
+  const [memberId, setMemberId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const enabled = platform.capabilities.hasFeature(user, "team_workspaces");
+  const memberLimit = platform.capabilities.getLimit(user, "team_members");
+
+const load = useCallback(async () => {
+    try { setTeams((await apiFetch<{ teams: TeamRow[] }>("/api/account/teams")).teams ?? []); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Could not load teams."); }
+  }, []);
+
+useEffect(() => { if (enabled) void load(); }, [enabled, load]);
+
+async function act(request: () => Promise<unknown>) {
+    setBusy(true); setError("");
+    try { await request(); await load(); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Request failed."); }
+    finally { setBusy(false); }
+  }
+
+if (!enabled) return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Teams</h2><p className="mt-3 rounded-xl border border-dashed border-zinc-300 p-4 text-[13px] leading-relaxed text-zinc-500 dark:border-zinc-700">Team workspaces are available on the team and enterprise plans. Your current plan: <span className="font-semibold capitalize">{user.planId}</span>. An administrator can change plans from the admin console.</p></Panel>;
+
+return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Teams</h2>
+    <p className="mt-1 text-[12.5px] text-zinc-500">Member limit on this plan: {memberLimit === null ? "unlimited" : memberLimit}. Members are added by user id (see the admin users list).</p>
+    {error ? <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-[12.5px] text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">{error}</div> : null}
+    <div className="mt-4 flex gap-2">
+      <input className="w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-1.5 text-[13px] outline-none focus:border-emerald-500 dark:border-zinc-700" placeholder="New team name" value={name} onChange={(event) => setName(event.target.value)} />
+      <Btn variant="primary" disabled={busy || !name.trim()} onClick={() => { const chosen = name.trim(); void act(async () => { await apiFetch("/api/account/teams", { method: "POST", body: JSON.stringify({ name: chosen }) }); setName(""); }); }}>Create</Btn>
+    </div>
+    <div className="mt-5">
+      {teams.length === 0 ? <p className="text-[13px] text-zinc-500">No teams yet. Create one above.</p> : teams.map((team) => (
+        <div key={team.id} className="border-b border-zinc-100 py-3 last:border-0 dark:border-zinc-800">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[13.5px] font-semibold">{team.name}</span>
+            <span className="rounded bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold capitalize text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{team.role}</span>
+          </div>
+          <p className="mt-0.5 text-[11.5px] text-zinc-400">{team.memberCount} member{team.memberCount === 1 ? "" : "s"}</p>
+          {team.role !== "member" ? <div className="mt-2 flex gap-2">
+            <input className="w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-1.5 text-[13px] outline-none focus:border-emerald-500 dark:border-zinc-700" placeholder="User id to add" value={memberId} onChange={(event) => setMemberId(event.target.value)} />
+            <Btn disabled={busy || memberId.trim().length !== 36} onClick={() => { const id = memberId.trim(); void act(async () => { await apiFetch(`/api/account/teams/${team.id}/members`, { method: "POST", body: JSON.stringify({ userId: id }) }); }); }}>Add</Btn>
+          </div> : null}
+          <div className="mt-2 flex gap-2">
+            <Btn disabled={busy} onClick={() => void act(async () => { await apiFetch(`/api/account/teams/${team.id}/members/${user.id}`, { method: "DELETE" }); })}>Leave</Btn>
+            {team.role === "owner" ? <Btn disabled={busy} onClick={() => void act(async () => { await apiFetch(`/api/account/teams/${team.id}`, { method: "DELETE" }); })}><Trash2 size={13} /> Delete team</Btn> : null}
+          </div>
+        </div>
+      ))}
+    </div>
+  </Panel>;
 }
 
 function BillingSection({ plan, apiLimit }: { plan: string; apiLimit: number | null }) {

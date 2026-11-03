@@ -111,7 +111,11 @@ export type ActivityType =
   | "integration_connected"
   | "integration_disconnected"
   | "account_deleted"
-  | "plan_changed";
+  | "plan_changed"
+  | "team_created"
+  | "team_member_added"
+  | "team_member_removed"
+  | "team_deleted";
 
 export type AuditLog = {
   id: EntityId;

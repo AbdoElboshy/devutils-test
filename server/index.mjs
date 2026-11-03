@@ -1,4 +1,4 @@
-import { mountApiV1, createGatewayStats, normalizePlanId } from "./api-v1.mjs";
+import { mountApiV1, createGatewayStats, normalizePlanId, planAllowsTeams, withinMemberLimit, canRemoveMember } from "./api-v1.mjs";
 import compression from "compression";
 import cookieParser from "cookie-parser";
 import express from "express";
@@ -573,6 +573,109 @@ app.post("/api/account/usage", async (req, res) => {
   if (r.error) return sendError(res, r.error);
   res.json({ ok: true });
 });
+/* p12: team workspaces. Service-role access (teams tables are RLS-locked
+   with no policies); authorization is enforced explicitly in each route.
+   Members are added by user id (profiles has no email column) — operators
+   find ids via GET /api/admin/users. */
+async function planOfUser(userId) {
+  const r = await service.from("profiles").select("plan_id").eq("user_id", userId).maybeSingle();
+  if (r.error) throw r.error;
+  return r.data?.plan_id ?? "free";
+}
+
+app.get("/api/account/teams", async (req, res) => {
+  try {
+    const mine = await service.from("team_members").select("team_id,role").eq("user_id", req.devutils.user.id);
+    if (mine.error) return sendError(res, mine.error, "Team lookup unavailable.");
+    const ids = (mine.data ?? []).map((row) => row.team_id);
+    if (!ids.length) return res.json({ teams: [] });
+    const roles = Object.fromEntries((mine.data ?? []).map((row) => [row.team_id, row.role]));
+    const t = await service.from("teams").select("id,name,created_at").in("id", ids).order("created_at", { ascending: false });
+    if (t.error) return sendError(res, t.error, "Team lookup unavailable.");
+    const counts = await service.from("team_members").select("team_id").in("team_id", ids);
+    if (counts.error) return sendError(res, counts.error, "Team lookup unavailable.");
+    const countById = {};
+    (counts.data ?? []).forEach((row) => { countById[row.team_id] = (countById[row.team_id] ?? 0) + 1; });
+    res.json({ teams: (t.data ?? []).map((row) => ({ ...row, role: roles[row.id], memberCount: countById[row.id] ?? 0 })) });
+  } catch (error) { sendError(res, error, "Team lookup unavailable."); }
+});
+
+app.post("/api/account/teams", async (req, res) => {
+  const name = String(req.body?.name ?? "").trim().slice(0, 100);
+  if (!name) return res.status(400).json({ error: "Team name must be 1-100 characters." });
+  try {
+    const planId = await planOfUser(req.devutils.user.id);
+    if (!planAllowsTeams(planId)) return res.status(403).json({ error: "Team workspaces require the team or enterprise plan." });
+    const t = await service.from("teams").insert({ name, owner_user_id: req.devutils.user.id }).select("id,name,created_at").single();
+    if (t.error) return sendError(res, t.error, "Team creation failed.");
+    const m = await service.from("team_members").insert({ team_id: t.data.id, user_id: req.devutils.user.id, role: "owner" });
+    if (m.error) { await service.from("teams").delete().eq("id", t.data.id); return sendError(res, m.error, "Team creation failed."); }
+    await audit(req.devutils.user.id, "team_created", { team_id: t.data.id });
+    res.json({ team: { ...t.data, role: "owner", memberCount: 1 } });
+  } catch (error) { sendError(res, error, "Team creation failed."); }
+});
+
+app.post("/api/account/teams/:id/members", async (req, res) => {
+  const teamId = String(req.params.id).slice(0, 64);
+  const userId = String(req.body?.userId ?? "").trim();
+  const role = ["admin", "member"].includes(req.body?.role) ? String(req.body.role) : "member";
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) return res.status(400).json({ error: "userId must be a user id (uuid). Find ids in the admin users list." });
+  try {
+    const me = await service.from("team_members").select("role").eq("team_id", teamId).eq("user_id", req.devutils.user.id).maybeSingle();
+    if (me.error) return sendError(res, me.error, "Member add failed.");
+    if (!me.data || !["owner", "admin"].includes(me.data.role)) return res.status(403).json({ error: "Only team owners and admins can add members." });
+    const planId = await planOfUser(req.devutils.user.id);
+    const count = await service.from("team_members").select("team_id", { count: "exact", head: true }).eq("team_id", teamId);
+    if (count.error) throw count.error;
+    if (!withinMemberLimit(planId, count.count ?? 0)) return res.status(429).json({ error: "This plan's team member limit has been reached." });
+    const target = await service.from("profiles").select("user_id").eq("user_id", userId).maybeSingle();
+    if (target.error) return sendError(res, target.error, "Member lookup unavailable.");
+    if (!target.data) return res.status(404).json({ error: "Unknown user." });
+    const ins = await service.from("team_members").insert({ team_id: teamId, user_id: userId, role });
+    if (ins.error) return sendError(res, ins.error, ins.error.code === "23505" ? "This user is already a member." : "Member add failed.");
+    await audit(req.devutils.user.id, "team_member_added", { team_id: teamId });
+    res.json({ ok: true });
+  } catch (error) { sendError(res, error, "Member add failed."); }
+});
+
+app.delete("/api/account/teams/:id/members/:userId", async (req, res) => {
+  const teamId = String(req.params.id).slice(0, 64);
+  const userId = String(req.params.userId).slice(0, 64);
+  try {
+    const me = await service.from("team_members").select("role").eq("team_id", teamId).eq("user_id", req.devutils.user.id).maybeSingle();
+    if (me.error) return sendError(res, me.error, "Member removal failed.");
+    if (!me.data) return res.status(404).json({ error: "Unknown team." });
+    const target = await service.from("team_members").select("role").eq("team_id", teamId).eq("user_id", userId).maybeSingle();
+    if (target.error) return sendError(res, target.error, "Member removal failed.");
+    if (!target.data) return res.status(404).json({ error: "This user is not a member." });
+    const isSelf = userId === req.devutils.user.id;
+    if (!isSelf && !canRemoveMember(me.data.role, target.data.role)) return res.status(403).json({ error: "Owners can remove anyone; admins can only remove members." });
+    if (target.data.role === "owner") {
+      const owners = await service.from("team_members").select("user_id", { count: "exact", head: true }).eq("team_id", teamId).eq("role", "owner");
+      if (owners.error) throw owners.error;
+      if ((owners.count ?? 0) <= 1) return res.status(400).json({ error: "A team must keep at least one owner. Delete the team instead." });
+    }
+    const del = await service.from("team_members").delete().eq("team_id", teamId).eq("user_id", userId);
+    if (del.error) return sendError(res, del.error, "Member removal failed.");
+    await audit(req.devutils.user.id, "team_member_removed", { team_id: teamId });
+    res.json({ ok: true });
+  } catch (error) { sendError(res, error, "Member removal failed."); }
+});
+
+app.delete("/api/account/teams/:id", async (req, res) => {
+  const teamId = String(req.params.id).slice(0, 64);
+  try {
+    const me = await service.from("team_members").select("role").eq("team_id", teamId).eq("user_id", req.devutils.user.id).maybeSingle();
+    if (me.error) return sendError(res, me.error, "Team deletion failed.");
+    if (!me.data) return res.status(404).json({ error: "Unknown team." });
+    if (me.data.role !== "owner") return res.status(403).json({ error: "Only the team owner can delete the team." });
+    const del = await service.from("teams").delete().eq("id", teamId);
+    if (del.error) return sendError(res, del.error, "Team deletion failed.");
+    await audit(req.devutils.user.id, "team_deleted", { team_id: teamId });
+    res.json({ ok: true });
+  } catch (error) { sendError(res, error, "Team deletion failed."); }
+});
+
 app.get("/api/account/audit", async (req, res) => {
   const r = await userDb(req.devutils.access).from("audit_logs").select("id,user_id,action,metadata,created_at").order("created_at", { ascending: false }).limit(20);
   if (r.error) return sendError(res, r.error);

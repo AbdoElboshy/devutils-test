@@ -386,7 +386,7 @@ ok("collection item without target rejected", () => assert.equal(safeCollectionI
 
 /* ---------------- Phase 10 API v1: auth, rate limit, quota, errors ---------------- */
 import {
-  parseBearer, hashApiKey, authzKey, allowRate, checkMonthlyQuota, apiV1ErrorStatus, API_V1_PLAN_LIMITS, monthKey, decideRate, normalizeWorkflowSteps, publicWorkflow, allowDoc, emptyGatewayStats, gatewayHit, createGatewayStats, normalizePlanId,
+  parseBearer, hashApiKey, authzKey, allowRate, checkMonthlyQuota, apiV1ErrorStatus, API_V1_PLAN_LIMITS, monthKey, decideRate, normalizeWorkflowSteps, publicWorkflow, allowDoc, emptyGatewayStats, gatewayHit, createGatewayStats, normalizePlanId, planAllowsTeams, withinMemberLimit, canRemoveMember,
 } from "../server/api-v1.mjs";
 
 ok("parseBearer accepts a du_live key", () => assert.equal(parseBearer("Bearer du_live_abc123"), "du_live_abc123"));
@@ -543,6 +543,29 @@ ok("p12: normalizePlanId rejects anonymous, unknown and non-string values", () =
   assert.equal(normalizePlanId("nope"), null);
   assert.equal(normalizePlanId(42), null);
   assert.equal(normalizePlanId(""), null);
+});
+
+/* ---------------- p12: teams ---------------- */
+ok("p12: planAllowsTeams accepts only team and enterprise", () => {
+  assert.equal(planAllowsTeams("team"), true);
+  assert.equal(planAllowsTeams("enterprise"), true);
+  assert.equal(planAllowsTeams("free"), false);
+  assert.equal(planAllowsTeams("pro"), false);
+});
+ok("p12: withinMemberLimit honors plan limits and unlimited", () => {
+  assert.equal(withinMemberLimit("team", 24), true);
+  assert.equal(withinMemberLimit("team", 25), false);
+  assert.equal(withinMemberLimit("enterprise", 9999), true);
+  assert.equal(withinMemberLimit("free", 0), false);
+  assert.equal(withinMemberLimit("pro", 0), false);
+});
+ok("p12: canRemoveMember enforces the role hierarchy", () => {
+  assert.equal(canRemoveMember("owner", "owner"), true);
+  assert.equal(canRemoveMember("owner", "member"), true);
+  assert.equal(canRemoveMember("admin", "member"), true);
+  assert.equal(canRemoveMember("admin", "admin"), false);
+  assert.equal(canRemoveMember("admin", "owner"), false);
+  assert.equal(canRemoveMember("member", "member"), false);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -150,11 +150,22 @@ ok("gateway usage reflects the pro plan", r.status === 200 && r.json?.plan === "
 const { error: setBackErr } = await service.from("profiles").update({ plan_id: originalPlan }).eq("user_id", full.userId);
 ok("original plan restored", !setBackErr, setBackErr?.message ?? "");
 
+console.log("12) Teams (tables + session guards)");
+r = await req("GET", "/api/account/teams");
+ok("teams routes require a session", r.status === 401, `got ${r.status}`);
+let teamId = null;
+const tIns = await service.from("teams").insert({ name: "smoke team", owner_user_id: full.userId }).select("id");
+teamId = tIns.data?.[0]?.id ?? null;
+ok("team row inserted (teams table exists)", !tIns.error && Boolean(teamId), tIns.error?.message ?? "");
+const tmIns = teamId ? await service.from("team_members").insert({ team_id: teamId, user_id: full.userId, role: "owner" }) : { error: "no team id" };
+ok("team_members row inserted (member table exists)", !tmIns.error, tmIns.error?.message ?? "");
+
 // Cleanup: revoke the read-only key, delete only THIS run's usage rows.
 await revokeByHash(readOnly.keyHash);
 const { error: delErr } = await service.from("usage_records").delete().in("resource_id", ["api:v1", "api:v1:workflow"]).gte("recorded_at", startTs);
 await revokeByHash(wfKey.keyHash);
 await revokeByHash(planKey.keyHash);
+if (teamId) await service.from("teams").delete().eq("id", teamId);
 const { error: wfDelErr } = await service.from("saved_workflows").delete().eq("id", wfId);
 const rateKeyIds = [full.id, readOnly.id].filter(Boolean);
 if (rateKeyIds.length) await service.from("rate_limit_hits").delete().in("key_id", rateKeyIds);
