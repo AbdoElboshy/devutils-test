@@ -1,4 +1,4 @@
-import { mountApiV1 } from "./api-v1.mjs";
+import { mountApiV1, createGatewayStats } from "./api-v1.mjs";
 import compression from "compression";
 import cookieParser from "cookie-parser";
 import express from "express";
@@ -751,6 +751,12 @@ app.use("/api/admin", adminLimit, requireOrigin, requireCsrf, requireSession, re
 
 app.get("/api/admin/me", (req, res) => res.json({ role: req.devutils.adminRole, userId: req.devutils.user.id, email: req.devutils.user.email }));
 
+/* p12: gateway observability for admins/moderators. Per-process (advisory,
+     resets on restart); shape pinned by unit tests in scripts/test-server.mjs. */
+app.get("/api/admin/api-stats", (_req, res) => {
+  try { res.json({ ok: true, stats: gatewayStats.snapshot() }); } catch (error) { sendError(res, error, "API stats unavailable."); }
+});
+
 app.get("/api/admin/registry", async (_req, res) => {
   try {
     const merged = await registry({ includeUnpublished: true, maxAgeMs: 0 });
@@ -1206,8 +1212,10 @@ app.put("/api/admin/flags/:key", requireRole("admin"), async (req, res) => {
   }
 });
 
+const gatewayStats = createGatewayStats();
 mountApiV1(app, {
   service,
+  stats: gatewayStats,
   /* DB-backed monthly usage counter (sub-track B batch 2). Writes to
      usage_records (metric "api_requests") — the same rows the account
      Usage page summarizes — so gateway traffic is restart-proof and

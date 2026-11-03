@@ -386,7 +386,7 @@ ok("collection item without target rejected", () => assert.equal(safeCollectionI
 
 /* ---------------- Phase 10 API v1: auth, rate limit, quota, errors ---------------- */
 import {
-  parseBearer, hashApiKey, authzKey, allowRate, checkMonthlyQuota, apiV1ErrorStatus, API_V1_PLAN_LIMITS, monthKey, decideRate, normalizeWorkflowSteps, publicWorkflow, allowDoc,
+  parseBearer, hashApiKey, authzKey, allowRate, checkMonthlyQuota, apiV1ErrorStatus, API_V1_PLAN_LIMITS, monthKey, decideRate, normalizeWorkflowSteps, publicWorkflow, allowDoc, emptyGatewayStats, gatewayHit, createGatewayStats,
 } from "../server/api-v1.mjs";
 
 ok("parseBearer accepts a du_live key", () => assert.equal(parseBearer("Bearer du_live_abc123"), "du_live_abc123"));
@@ -499,6 +499,36 @@ ok("p12: allowDoc window slides and fail-opens without IP", () => {
   assert.equal(allowDoc(ip, 61001).ok, true);
   assert.equal(allowDoc(undefined).ok, true);
   assert.equal(allowDoc("").ok, true);
+});
+
+/* ---------------- p12: gateway observability ---------------- */
+ok("p12: gatewayHit counts endpoints, statuses and errors", () => {
+  const stats = emptyGatewayStats();
+  gatewayHit(stats, { endpoint: "GET /api/v1/operations", status: 200 });
+  gatewayHit(stats, { endpoint: "GET /api/v1/operations", status: 200 });
+  gatewayHit(stats, { endpoint: "POST /api/v1/operations/base64.encode/execute", status: 429 });
+  assert.equal(stats.total, 3);
+  assert.equal(stats.byEndpoint["GET /api/v1/operations"], 2);
+  assert.equal(stats.byStatus[429], 1);
+  assert.equal(stats.errors.length, 1);
+  assert.equal(stats.errors[0].status, 429);
+});
+ok("p12: gatewayHit error ring keeps the last 20", () => {
+  const stats = emptyGatewayStats();
+  for (let i = 0; i < 25; i++) gatewayHit(stats, { endpoint: "POST /api/v1/x", status: 500, error: "boom " + i });
+  assert.equal(stats.total, 25);
+  assert.equal(stats.errors.length, 20);
+  assert.ok(stats.errors[0].message.includes("boom 5"));
+  assert.ok(stats.errors[19].message.includes("boom 24"));
+});
+ok("p12: createGatewayStats snapshot is an isolated copy", () => {
+  const store = createGatewayStats();
+  store.hit({ endpoint: "GET /api/v1/usage", status: 200 });
+  const snap = store.snapshot();
+  assert.equal(snap.total, 1);
+  assert.equal(typeof snap.since, "string");
+  snap.byEndpoint.x = 99;
+  assert.equal(store.snapshot().byEndpoint.x, undefined);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

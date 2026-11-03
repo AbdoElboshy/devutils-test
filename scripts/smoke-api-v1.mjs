@@ -131,6 +131,10 @@ ok("main key revoked in DB", await revokeByHash(full.keyHash));
 r = await req("GET", "/api/v1/operations", { key: full.secret });
 ok("revoked key -> 401 'revoked'", r.status === 401 && /revoked/.test(r.json?.error ?? ""));
 
+console.log("10) Admin observability");
+r = await req("GET", "/api/admin/api-stats");
+ok("api-stats requires an admin session", r.status === 401 || r.status === 403, `got ${r.status}`);
+
 // Cleanup: revoke the read-only key, delete only THIS run's usage rows.
 await revokeByHash(readOnly.keyHash);
 const { error: delErr } = await service.from("usage_records").delete().in("resource_id", ["api:v1", "api:v1:workflow"]).gte("recorded_at", startTs);

@@ -191,6 +191,36 @@ export function publicWorkflow(row) {
   };
 }
 
+/* ---------- p12: gateway observability (per-process, advisory) ---------- */
+
+/** Fresh stats object. since = creation time (honest: resets on restart). */
+export function emptyGatewayStats(now = new Date()) {
+  return { since: now.toISOString(), total: 0, byEndpoint: {}, byStatus: {}, errors: [] };
+}
+
+/** Record one finished /api/v1 response. errors keeps the last 20 (>=400). */
+export function gatewayHit(stats, { endpoint, status, error }, now = new Date()) {
+  stats.total++;
+  stats.byEndpoint[endpoint] = (stats.byEndpoint[endpoint] ?? 0) + 1;
+  stats.byStatus[status] = (stats.byStatus[status] ?? 0) + 1;
+  if (status >= 400) {
+    stats.errors.push({ at: now.toISOString(), endpoint, status, message: String(error ?? "").slice(0, 200) });
+    if (stats.errors.length > 20) stats.errors.shift();
+  }
+  return stats;
+}
+
+/** Injectable store around the pure helpers. snapshot() returns a copy. */
+export function createGatewayStats() {
+  const stats = emptyGatewayStats();
+  return {
+    hit(fields) { return gatewayHit(stats, fields); },
+    snapshot() {
+      return { since: stats.since, total: stats.total, byEndpoint: { ...stats.byEndpoint }, byStatus: { ...stats.byStatus }, errors: [...stats.errors] };
+    },
+  };
+}
+
 /* ---------- mount ---------- */
 
 function corsHeaders(res) {
@@ -202,10 +232,25 @@ function corsHeaders(res) {
   });
 }
 
-export function mountApiV1(app, { service, usage, planOf, rate }) {
+export function mountApiV1(app, { service, usage, planOf, rate, stats }) {
   const usageStore = usage ?? createMemoryUsage();
   const rateStore = rate ?? null;
   const planLimitOf = planOf ?? (async () => "free");
+
+/* p12: observability — one hit per finished /api/v1 response, registered
+     before all routes so it sees everything. Never breaks a response. */
+  const statsStore = stats ?? null;
+  if (statsStore) {
+    app.use("/api/v1", (req, res, next) => {
+      const start = Date.now();
+      res.on("finish", () => {
+        try {
+          statsStore.hit({ endpoint: `${req.method} /api/v1${req.path}`.slice(0, 200), status: res.statusCode, durationMs: Math.max(0, Date.now() - start) });
+        } catch { /* stats must never fail a response */ }
+      });
+      next();
+    });
+  }
 
 /* Public and unauthenticated: the OpenAPI document for this gateway.
      Loaded once at mount; the route answers 503 if the file is missing. */
