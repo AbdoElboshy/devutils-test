@@ -59,7 +59,7 @@ export class HttpAuthProvider implements AuthProvider {
   async requestPasswordReset(email: string, _redirectTo: string): Promise<void> { await apiFetch("/api/auth/forgot", { method: "POST", body: JSON.stringify({ email }) }); }
   async updatePassword(password: string): Promise<void> { await apiFetch("/api/auth/password", { method: "POST", body: JSON.stringify({ password }) }); this.emit(null); this.changed(); }
   async updateEmail(email: string): Promise<void> { await apiFetch("/api/auth/email", { method: "POST", body: JSON.stringify({ email }) }); }
-  async updateProfileMetadata(input: { displayName: string; avatarUrl?: string }): Promise<void> { await apiFetch("/api/auth/metadata", { method: "POST", body: JSON.stringify(input) }); this.changed(); }
+  async updateProfileMetadata(input: { displayName: string; avatarUrl?: string }): Promise<void> { await apiFetch("/api/auth/metadata", { method: "POST", body: JSON.stringify(input) }); void this.getUser().then((user) => this.emit(user)).catch(() => { /* keep last known user */ }); this.changed(); }
   async resendVerification(email: string, _redirectTo: string): Promise<void> { await apiFetch("/api/auth/resend", { method: "POST", body: JSON.stringify({ email }) }); }
   async deleteAccount(): Promise<void> { await apiFetch("/api/account", { method: "DELETE" }); this.emit(null); this.changed(); }
   subscribe(listener: (user: User | null) => void): Unsubscribe {

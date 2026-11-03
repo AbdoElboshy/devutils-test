@@ -306,6 +306,7 @@ function ProfileSection({ value, email, emailVerified: _emailVerified, onSaved }
     try {
       const result = await apiFetch<{ avatarUrl: string }>("/api/account/avatar", { method: "POST", headers: { "Content-Type": file.type }, body: file });
       setProfile((current) => ({ ...current, avatarUrl: result.avatarUrl }));
+      await platform.auth.updateProfileMetadata({ displayName: profile.displayName ?? "", avatarUrl: result.avatarUrl });
       setMessage("Avatar uploaded and saved to your profile.");
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Avatar upload failed."); }
     finally { setAvatarBusy(false); }
