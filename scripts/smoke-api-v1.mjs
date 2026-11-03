@@ -135,6 +135,20 @@ console.log("10) Admin observability");
 r = await req("GET", "/api/admin/api-stats");
 ok("api-stats requires an admin session", r.status === 401 || r.status === 403, `got ${r.status}`);
 
+console.log("11) Plan management + gateway entitlement loop");
+r = await req("GET", "/api/admin/users");
+ok("admin users list requires an admin session", r.status === 401 || r.status === 403, `got ${r.status}`);
+r = await req("PUT", "/api/admin/users/00000000-0000-0000-0000-000000000000/plan", { body: { planId: "pro" } });
+ok("admin plan route requires an admin session", r.status === 401 || r.status === 403, `got ${r.status}`);
+const { data: planRow } = await service.from("profiles").select("plan_id").eq("user_id", full.userId).single();
+const originalPlan = planRow?.plan_id ?? "free";
+const { error: setUpErr } = await service.from("profiles").update({ plan_id: "pro" }).eq("user_id", full.userId);
+ok("plan set to pro in DB", !setUpErr, setUpErr?.message ?? "");
+r = await req("GET", "/api/v1/usage", { key: full.secret });
+ok("gateway usage reflects the pro plan", r.json?.plan === "pro", `got ${r.json?.plan}`);
+const { error: setBackErr } = await service.from("profiles").update({ plan_id: originalPlan }).eq("user_id", full.userId);
+ok("original plan restored", !setBackErr, setBackErr?.message ?? "");
+
 // Cleanup: revoke the read-only key, delete only THIS run's usage rows.
 await revokeByHash(readOnly.keyHash);
 const { error: delErr } = await service.from("usage_records").delete().in("resource_id", ["api:v1", "api:v1:workflow"]).gte("recorded_at", startTs);

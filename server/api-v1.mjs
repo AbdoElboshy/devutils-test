@@ -133,6 +133,14 @@ export function apiV1ErrorStatus(error) {
 /** Default monthly limits by plan (mirrors src/platform/features.ts). */
 export const API_V1_PLAN_LIMITS = Object.freeze({ anonymous: 0, free: 1000, pro: 50000, team: 250000, enterprise: null });
 
+/** Normalize an admin-supplied plan id. Only the four plans profiles.plan_id
+    can hold; "anonymous" is not a real account plan. Null on anything else. */
+export function normalizePlanId(value) {
+  if (typeof value !== "string") return null;
+  const plan = value.trim().toLowerCase();
+  return ["free", "pro", "team", "enterprise"].includes(plan) ? plan : null;
+}
+
 /* ---------- in-memory usage counter (injectable for persistence later) ---------- */
 
 export function monthKey(date = new Date()) {

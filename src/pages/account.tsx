@@ -99,7 +99,7 @@ if (!auth.enabled) return <AccountUnavailable onNav={onNav} />;
               {section === "collections" && <CollectionsSection collections={collections} onReload={load} />}
               {section === "api-keys" && <ApiKeysSection userId={auth.user.id} keys={keys} onChanged={refreshKeys} />}
               {section === "usage" && <UsageSection usage={usage} user={auth.user} />}
-              {section === "billing" && <BillingSection plan={auth.user.planId} />}
+              {section === "billing" && <BillingSection plan={auth.user.planId} apiLimit={platform.capabilities.getLimit(auth.user, "api_requests_per_month")} />}
               {(section === "security" || section === "settings") && <SettingsSection profile={profile} onNav={onNav} />}
             </>
           )}
@@ -327,8 +327,8 @@ function UsageSection({ usage, user }: { usage: UsageSummary; user: User }) {
   return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Usage since {new Date(usage.periodStart).toLocaleDateString()}</h2><p className="mt-1 text-[12.5px] text-zinc-500">Only operation names, IDs, counts and timestamps are recorded. Inputs and outputs are excluded.</p><p className="mt-1 text-[12.5px] text-zinc-500">Plan <span className="font-semibold capitalize">{user.planId}</span> · {remaining === null ? "unlimited API requests" : `${remaining.toLocaleString()} of ${(apiLimit ?? 0).toLocaleString()} API requests remaining`} this month · resets {resetsOn}.</p><div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-5"><Stat label="Tool runs" value={usage.toolRuns.toLocaleString()} /><Stat label="Workflow runs" value={usage.workflowRuns.toLocaleString()} /><Stat label="API requests" value={`${usage.apiRequests.toLocaleString()} / ${apiLimit ?? "∞"}`} /><Stat label="API remaining" value={remaining === null ? "∞" : remaining.toLocaleString()} /><Stat label="Integration calls" value={usage.integrationCalls.toLocaleString()} /></div></Panel>;
 }
 
-function BillingSection({ plan }: { plan: string }) {
-  return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Plan and billing</h2><p className="mt-2 text-[13px]">Current plan: <span className="rounded bg-emerald-100 px-2 py-1 font-semibold capitalize text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">{plan}</span></p><p className="mt-4 rounded-xl border border-dashed border-zinc-300 p-4 text-[13px] leading-relaxed text-zinc-500 dark:border-zinc-700">No billing provider is configured, so DevUtils does not present checkout, cancellation, pricing, or upgrade actions that cannot work. The provider-independent subscription and entitlement models are ready for a later billing integration.</p></Panel>;
+function BillingSection({ plan, apiLimit }: { plan: string; apiLimit: number | null }) {
+  return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Plan and billing</h2><p className="mt-2 text-[13px]">Current plan: <span className="rounded bg-emerald-100 px-2 py-1 font-semibold capitalize text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">{plan}</span></p><p className="mt-3 text-[13px] text-zinc-500">Monthly API quota on this plan: <span className="font-semibold text-zinc-700 dark:text-zinc-300">{apiLimit === null ? "unlimited" : `${apiLimit.toLocaleString()} requests`}</span>.</p><p className="mt-4 rounded-xl border border-dashed border-zinc-300 p-4 text-[13px] leading-relaxed text-zinc-500 dark:border-zinc-700">No payment provider is configured, so DevUtils presents no checkout, cancellation, or pricing actions that cannot work. Plan changes are applied by an administrator and take effect immediately. The provider-independent subscription model remains ready for a Stripe, Paddle, or Lemon Squeezy integration.</p></Panel>;
 }
 
 function SettingsSection({ profile, onNav }: { profile: Profile | null; onNav: (route: string) => void }) {

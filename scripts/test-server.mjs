@@ -386,7 +386,7 @@ ok("collection item without target rejected", () => assert.equal(safeCollectionI
 
 /* ---------------- Phase 10 API v1: auth, rate limit, quota, errors ---------------- */
 import {
-  parseBearer, hashApiKey, authzKey, allowRate, checkMonthlyQuota, apiV1ErrorStatus, API_V1_PLAN_LIMITS, monthKey, decideRate, normalizeWorkflowSteps, publicWorkflow, allowDoc, emptyGatewayStats, gatewayHit, createGatewayStats,
+  parseBearer, hashApiKey, authzKey, allowRate, checkMonthlyQuota, apiV1ErrorStatus, API_V1_PLAN_LIMITS, monthKey, decideRate, normalizeWorkflowSteps, publicWorkflow, allowDoc, emptyGatewayStats, gatewayHit, createGatewayStats, normalizePlanId,
 } from "../server/api-v1.mjs";
 
 ok("parseBearer accepts a du_live key", () => assert.equal(parseBearer("Bearer du_live_abc123"), "du_live_abc123"));
@@ -529,6 +529,20 @@ ok("p12: createGatewayStats snapshot is an isolated copy", () => {
   assert.equal(typeof snap.since, "string");
   snap.byEndpoint.x = 99;
   assert.equal(store.snapshot().byEndpoint.x, undefined);
+});
+
+/* ---------------- p12: plan management ---------------- */
+ok("p12: normalizePlanId accepts the four real plans (case/space tolerant)", () => {
+  assert.equal(normalizePlanId("free"), "free");
+  assert.equal(normalizePlanId("PRO"), "pro");
+  assert.equal(normalizePlanId(" team "), "team");
+  assert.equal(normalizePlanId("enterprise"), "enterprise");
+});
+ok("p12: normalizePlanId rejects anonymous, unknown and non-string values", () => {
+  assert.equal(normalizePlanId("anonymous"), null);
+  assert.equal(normalizePlanId("nope"), null);
+  assert.equal(normalizePlanId(42), null);
+  assert.equal(normalizePlanId(""), null);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

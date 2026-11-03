@@ -110,7 +110,8 @@ export type ActivityType =
   | "workflow_created"
   | "integration_connected"
   | "integration_disconnected"
-  | "account_deleted";
+  | "account_deleted"
+  | "plan_changed";
 
 export type AuditLog = {
   id: EntityId;
