@@ -25,17 +25,45 @@ alter table public.teams enable row level security;
 alter table public.team_members enable row level security;
 
 do $$
-declare c text;
+declare
+  c text;
+  def text;
+  members text[] := array[]::text[];
+  rec record;
+  lit text;
 begin
-  select conname into c from pg_constraint
+  -- Find the current action check constraint (identified by a known member).
+  select conname, pg_get_constraintdef(oid) into c, def
+    from pg_constraint
    where conrelid = 'public.audit_logs'::regclass and contype = 'c'
-     and pg_get_constraintdef(oid) ilike '%account_deleted%'
+     and pg_get_constraintdef(oid) ~* 'account_deleted'
    limit 1;
+
+-- Collect its allowed actions by parsing the quoted literals in the def.
+  -- (The live constraint contains actions beyond the repo migration, e.g.
+  -- tool_visibility_changed — every existing member must be preserved.)
   if c is not null then
+    for rec in select (regexp_matches(def, $$([^']+)$$, 'g'))[1] as action loop
+      members := array_append(members, rec.action);
+    end loop;
     execute format('alter table public.audit_logs drop constraint %I', c);
   end if;
-  alter table public.audit_logs add constraint audit_logs_action_check
-    check (action in ('logged_in','profile_updated','password_changed','api_key_created','api_key_revoked',
-                      'workflow_created','integration_connected','integration_disconnected','account_deleted',
-                      'plan_changed','team_created','team_member_added','team_member_removed','team_deleted'));
+
+-- Safety net: every action actually present in rows stays allowed.
+  for rec in select distinct action from public.audit_logs loop
+    members := array_append(members, rec.action);
+  end loop;
+
+-- New p12 actions plus the known base list.
+  members := members || array['plan_changed','team_created','team_member_added',
+                               'team_member_removed','team_deleted',
+                               'logged_in','profile_updated','password_changed',
+                               'api_key_created','api_key_revoked','workflow_created',
+                               'integration_connected','integration_disconnected',
+                               'account_deleted'];
+
+select string_agg(quote_literal(x), ',' order by x) into lit
+    from (select distinct unnest(members) as x) t;
+
+execute format('alter table public.audit_logs add constraint audit_logs_action_check check (action = ANY (ARRAY[%s]::text[]))', lit);
 end $$;

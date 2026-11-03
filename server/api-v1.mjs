@@ -151,8 +151,9 @@ export function planAllowsTeams(planId) {
 
 /** True when the NEXT member still fits. null limit = unlimited. */
 export function withinMemberLimit(planId, memberCount) {
-  const limit = TEAM_MEMBER_LIMITS[planId] ?? 0;
-  if (limit === null) return true;
+  const limit = TEAM_MEMBER_LIMITS[planId];
+  if (limit === undefined) return false; // unknown plan: no teams
+  if (limit === null) return true;      // null = unlimited (enterprise)
   return Number(memberCount ?? 0) < limit;
 }
 
