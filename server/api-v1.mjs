@@ -165,6 +165,11 @@ export function canRemoveMember(actorRole, targetRole) {
   return false;
 }
 
+/** p13: owners and admins manage a team's shared workflows; members read/copy. */
+export function canManageTeamWorkflows(role) {
+  return role === "owner" || role === "admin";
+}
+
 /* ---------- in-memory usage counter (injectable for persistence later) ---------- */
 
 export function monthKey(date = new Date()) {

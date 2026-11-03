@@ -386,7 +386,7 @@ ok("collection item without target rejected", () => assert.equal(safeCollectionI
 
 /* ---------------- Phase 10 API v1: auth, rate limit, quota, errors ---------------- */
 import {
-  parseBearer, hashApiKey, authzKey, allowRate, checkMonthlyQuota, apiV1ErrorStatus, API_V1_PLAN_LIMITS, monthKey, decideRate, normalizeWorkflowSteps, publicWorkflow, allowDoc, emptyGatewayStats, gatewayHit, createGatewayStats, normalizePlanId, planAllowsTeams, withinMemberLimit, canRemoveMember,
+  parseBearer, hashApiKey, authzKey, allowRate, checkMonthlyQuota, apiV1ErrorStatus, API_V1_PLAN_LIMITS, monthKey, decideRate, normalizeWorkflowSteps, publicWorkflow, allowDoc, emptyGatewayStats, gatewayHit, createGatewayStats, normalizePlanId, planAllowsTeams, withinMemberLimit, canRemoveMember, canManageTeamWorkflows,
 } from "../server/api-v1.mjs";
 
 ok("parseBearer accepts a du_live key", () => assert.equal(parseBearer("Bearer du_live_abc123"), "du_live_abc123"));
@@ -566,6 +566,13 @@ ok("p12: canRemoveMember enforces the role hierarchy", () => {
   assert.equal(canRemoveMember("admin", "admin"), false);
   assert.equal(canRemoveMember("admin", "owner"), false);
   assert.equal(canRemoveMember("member", "member"), false);
+});
+
+ok("p13: canManageTeamWorkflows — owners and admins only", () => {
+  assert.equal(canManageTeamWorkflows("owner"), true);
+  assert.equal(canManageTeamWorkflows("admin"), true);
+  assert.equal(canManageTeamWorkflows("member"), false);
+  assert.equal(canManageTeamWorkflows(null), false);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

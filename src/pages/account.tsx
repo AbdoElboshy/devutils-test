@@ -330,18 +330,30 @@ function UsageSection({ usage, user }: { usage: UsageSummary; user: User }) {
 }
 
 type TeamRow = { id: string; name: string; created_at: string; role: "owner" | "admin" | "member"; memberCount: number };
+type TeamWorkflowRow = { id: string; name: string; description: string; steps: Array<{ id: string; operationId: string; label?: string }>; updated_at: string };
 
 function TeamsSection({ user }: { user: User }) {
   const [teams, setTeams] = useState<TeamRow[]>([]);
   const [name, setName] = useState("");
   const [memberId, setMemberId] = useState("");
+  const [teamWfs, setTeamWfs] = useState<Record<string, TeamWorkflowRow[]>>({});
+  const [shareId, setShareId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const enabled = platform.capabilities.hasFeature(user, "team_workspaces");
   const memberLimit = platform.capabilities.getLimit(user, "team_members");
 
 const load = useCallback(async () => {
-    try { setTeams((await apiFetch<{ teams: TeamRow[] }>("/api/account/teams")).teams ?? []); }
+    try {
+      const data = await apiFetch<{ teams: TeamRow[] }>("/api/account/teams");
+      const list = data.teams ?? [];
+      setTeams(list);
+      const entries = await Promise.all(list.map(async (team) => {
+        try { return [team.id, (await apiFetch<{ workflows: TeamWorkflowRow[] }>(`/api/account/teams/${team.id}/workflows`)).workflows ?? []] as const; }
+        catch { return [team.id, []] as const; }
+      }));
+      setTeamWfs(Object.fromEntries(entries));
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Could not load teams."); }
   }, []);
 
@@ -378,6 +390,22 @@ return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Teams</
           <div className="mt-2 flex gap-2">
             <Btn disabled={busy} onClick={() => void act(async () => { await apiFetch(`/api/account/teams/${team.id}/members/${user.id}`, { method: "DELETE" }); })}>Leave</Btn>
             {team.role === "owner" ? <Btn disabled={busy} onClick={() => void act(async () => { await apiFetch(`/api/account/teams/${team.id}`, { method: "DELETE" }); })}><Trash2 size={13} /> Delete team</Btn> : null}
+          </div>
+          <div className="mt-3 border-t border-zinc-100 pt-2 dark:border-zinc-800">
+            <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-400">Shared workflows</p>
+            {(teamWfs[team.id] ?? []).length === 0 ? <p className="mt-1 text-[12px] text-zinc-500">None yet.</p> : (teamWfs[team.id] ?? []).map((wf) => (
+              <div key={wf.id} className="mt-1 flex items-center justify-between gap-2">
+                <span className="text-[12.5px] font-medium">{wf.name}</span>
+                <span className="flex gap-1">
+                  <Btn disabled={busy} onClick={() => { void act(async () => { await apiFetch(`/api/account/workflows/${wf.id}`, { method: "PUT", body: JSON.stringify({ name: `${wf.name} (team copy)`.slice(0, 100), description: wf.description, steps: wf.steps }) }); }); }}>Copy to mine</Btn>
+                  {team.role !== "member" ? <Btn disabled={busy} onClick={() => { void act(async () => { await apiFetch(`/api/account/teams/${team.id}/workflows/${wf.id}`, { method: "DELETE" }); }); }}><Trash2 size={13} /></Btn> : null}
+                </span>
+              </div>
+            ))}
+            {team.role !== "member" ? <div className="mt-2 flex gap-2">
+              <input className="w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-1.5 text-[13px] outline-none focus:border-emerald-500 dark:border-zinc-700" placeholder="Your workflow id to share" value={shareId} onChange={(event) => setShareId(event.target.value)} />
+              <Btn disabled={busy || !shareId.trim()} onClick={() => { const id = shareId.trim(); void act(async () => { const mine = await apiFetch<SavedWorkflow[]>("/api/account/workflows"); const wf = (Array.isArray(mine) ? mine : []).find((row) => row.id === id); if (!wf) throw new Error(`No personal workflow with id ${id}.`); await apiFetch(`/api/account/teams/${team.id}/workflows/${id}`, { method: "PUT", body: JSON.stringify({ name: wf.name, description: wf.description, steps: wf.steps }) }); }); setShareId(""); }}>Share</Btn>
+            </div> : null}
           </div>
         </div>
       ))}

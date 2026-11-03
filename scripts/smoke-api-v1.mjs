@@ -244,6 +244,37 @@ ok("plan_changed audit row recorded (p12 constraint live)", (auditRows ?? []).le
 r2 = await sreq("GET", "/api/admin/api-stats", { jar });
 ok("api-stats -> 200 for an admin session", r2.status === 200, `got ${r2.status}`);
 
+console.log("16) Team-scoped workflows (share, read, permissions, copy)");
+const { error: planTeamErr } = await service.from("profiles").update({ plan_id: "team" }).eq("user_id", smokeUserId);
+r2 = await sreq("GET", "/api/account/teams", { jar });
+const tId = (r2.json?.teams ?? []).find((t) => t.id === liveTeamId)?.id ?? null;
+ok("team still listed after plan churn", !planTeamErr && Boolean(tId));
+const shareWfId = `smoke-team-wf-${stamp}`;
+r2 = await sreq("PUT", `/api/account/teams/${tId}/workflows/${shareWfId}`, { jar, origin, csrf, body: { name: "Shared smoke wf", description: "", steps: [{ operationId: "base64.encode" }, { operationId: "base64.decode" }] } });
+ok("owner shares a workflow to the team -> 200", r2.status === 200, `got ${r2.status} ${r2.json?.error ?? ""}`);
+r2 = await sreq("GET", `/api/account/teams/${tId}/workflows`, { jar });
+const sharedWf = (r2.json?.workflows ?? []).find((w) => w.id === shareWfId);
+ok("shared workflow listed with 2 steps", r2.status === 200 && sharedWf?.steps?.length === 2);
+r2 = await sreq("POST", `/api/account/teams/${tId}/members`, { jar, origin, csrf, body: { userId: memberId } });
+ok("member re-added for sharing", r2.status === 200, `got ${r2.status} ${r2.json?.error ?? ""}`);
+const mJar = {};
+r2 = await sreq("GET", "/api/auth/csrf", { jar: mJar });
+const mCsrf = r2.json?.token ?? "";
+r2 = await sreq("POST", "/api/auth/login", { jar: mJar, origin, csrf: mCsrf, body: { email: memberEmail, password: smokePassword } });
+ok("member logs in through the app", r2.status === 200 && Boolean(mJar.du_access));
+r2 = await sreq("GET", `/api/account/teams/${tId}/workflows`, { jar: mJar });
+ok("member reads team workflows", r2.status === 200 && (r2.json?.workflows ?? []).some((w) => w.id === shareWfId));
+r2 = await sreq("PUT", `/api/account/teams/${tId}/workflows/member-edit`, { jar: mJar, origin, csrf: mCsrf, body: { name: "nope", steps: [{ operationId: "base64.encode" }] } });
+ok("member cannot manage shared workflows -> 403", r2.status === 403);
+r2 = await sreq("PUT", `/api/account/workflows/${shareWfId}`, { jar: mJar, origin, csrf: mCsrf, body: { name: "Copied from team", description: "", steps: sharedWf?.steps ?? [] } });
+ok("member copies the shared workflow to personal -> 200", r2.status === 200, `got ${r2.status} ${r2.json?.error ?? ""}`);
+r2 = await sreq("GET", "/api/account/workflows", { jar: mJar });
+ok("member's personal copy is listed", (r2.json ?? []).some((w) => w?.id === shareWfId));
+r2 = await sreq("DELETE", `/api/account/teams/${tId}/workflows/${shareWfId}`, { jar, origin, csrf });
+ok("owner deletes the shared workflow -> 200", r2.status === 200, `got ${r2.status}`);
+r2 = await sreq("GET", `/api/account/teams/${tId}/workflows`, { jar });
+ok("shared workflow no longer listed", !(r2.json?.workflows ?? []).some((w) => w.id === shareWfId));
+
 // Cleanup: revoke the read-only key, delete only THIS run's usage rows.
 await revokeByHash(readOnly.keyHash);
 const { error: delErr } = await service.from("usage_records").delete().in("resource_id", ["api:v1", "api:v1:workflow"]).gte("recorded_at", startTs);

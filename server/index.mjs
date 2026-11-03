@@ -1,4 +1,4 @@
-import { mountApiV1, createGatewayStats, normalizePlanId, planAllowsTeams, withinMemberLimit, canRemoveMember } from "./api-v1.mjs";
+import { mountApiV1, createGatewayStats, normalizePlanId, planAllowsTeams, withinMemberLimit, canRemoveMember, canManageTeamWorkflows } from "./api-v1.mjs";
 import compression from "compression";
 import cookieParser from "cookie-parser";
 import express from "express";
@@ -559,6 +559,55 @@ for (const resource of ["workflows", "presets"]) {
     res.json({ ok: true });
   });
 }
+
+/* p13: team-scoped workflows. Any member can read and copy a shared
+   workflow into their personal space (via the existing personal upsert
+   route); owners and admins manage the shared copy. */
+app.get("/api/account/teams/:id/workflows", async (req, res) => {
+  const teamId = String(req.params.id).slice(0, 64);
+  try {
+    const me = await service.from("team_members").select("role").eq("team_id", teamId).eq("user_id", req.devutils.user.id).maybeSingle();
+    if (me.error) return sendError(res, me.error, "Team workflow lookup unavailable.");
+    if (!me.data) return res.status(404).json({ error: "Unknown team." });
+    const r = await service.from("team_workflows").select("id,name,description,steps,updated_at,updated_by").eq("team_id", teamId).order("updated_at", { ascending: false });
+    if (r.error) return sendError(res, r.error, "Team workflow lookup unavailable.");
+    res.json({ workflows: r.data ?? [] });
+  } catch (error) { sendError(res, error, "Team workflow lookup unavailable."); }
+});
+
+app.put("/api/account/teams/:id/workflows/:wfId", async (req, res) => {
+  const teamId = String(req.params.id).slice(0, 64);
+  const wfId = String(req.params.wfId).slice(0, 200);
+  const body = req.body ?? {};
+  const name = String(body.name ?? "").trim().slice(0, 100);
+  const steps = safeSteps(body.steps);
+  if (!name) return res.status(400).json({ error: "Workflow name must be 1-100 characters." });
+  if (!steps.length) return res.status(400).json({ error: "A workflow needs at least one step." });
+  try {
+    const me = await service.from("team_members").select("role").eq("team_id", teamId).eq("user_id", req.devutils.user.id).maybeSingle();
+    if (me.error) return sendError(res, me.error, "Team workflow save failed.");
+    if (!me.data) return res.status(404).json({ error: "Unknown team." });
+    if (!canManageTeamWorkflows(me.data.role)) return res.status(403).json({ error: "Only team owners and admins can manage shared workflows." });
+    const r = await service.from("team_workflows").upsert({ team_id: teamId, id: wfId, name, description: String(body.description ?? "").slice(0, 500), steps, updated_by: req.devutils.user.id, updated_at: new Date().toISOString() }, { onConflict: "team_id,id" }).select("id,name,updated_at");
+    if (r.error) return sendError(res, r.error, "Team workflow save failed.");
+    await audit(req.devutils.user.id, "workflow_created", { resource: "team_workflow", team_id: teamId, id: wfId });
+    res.json(r.data?.[0] ?? { ok: true });
+  } catch (error) { sendError(res, error, "Team workflow save failed."); }
+});
+
+app.delete("/api/account/teams/:id/workflows/:wfId", async (req, res) => {
+  const teamId = String(req.params.id).slice(0, 64);
+  const wfId = String(req.params.wfId).slice(0, 200);
+  try {
+    const me = await service.from("team_members").select("role").eq("team_id", teamId).eq("user_id", req.devutils.user.id).maybeSingle();
+    if (me.error) return sendError(res, me.error, "Team workflow deletion failed.");
+    if (!me.data) return res.status(404).json({ error: "Unknown team." });
+    if (!canManageTeamWorkflows(me.data.role)) return res.status(403).json({ error: "Only team owners and admins can manage shared workflows." });
+    const r = await service.from("team_workflows").delete().eq("team_id", teamId).eq("id", wfId);
+    if (r.error) return sendError(res, r.error, "Team workflow deletion failed.");
+    res.json({ ok: true });
+  } catch (error) { sendError(res, error, "Team workflow deletion failed."); }
+});
 
 app.get("/api/account/usage", async (req, res) => {
   const r = await userDb(req.devutils.access).rpc("get_usage_summary");
