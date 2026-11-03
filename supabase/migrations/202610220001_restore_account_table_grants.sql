@@ -26,7 +26,7 @@ begin;
 
 grant select on public.profiles to authenticated;
 grant insert(user_id, display_name, avatar_url, timezone, locale, theme, preferences, updated_at) on public.profiles to authenticated;
-grant update(display_name, avatar_url, timezone, locale, theme, preferences, updated_at) on public.profiles to authenticated;
+grant update(user_id, display_name, avatar_url, timezone, locale, theme, preferences, updated_at) on public.profiles to authenticated;
 grant select, insert, delete on public.favorites to authenticated;
 grant select, insert, update, delete on public.recent_tools, public.saved_workflows, public.saved_presets to authenticated;
 grant select on public.usage_records, public.api_keys, public.subscriptions, public.integration_connections, public.audit_logs, public.organizations, public.organization_members to authenticated;

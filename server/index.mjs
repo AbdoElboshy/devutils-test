@@ -63,6 +63,7 @@ if (!existsSync(path.join(dist, "index.html"))) {
 const indexHtml = readFileSync(path.join(dist, "index.html"), "utf8");
 const baseRegistry = JSON.parse(readFileSync(path.join(root, "registry.generated.json"), "utf8"));
 const APP_URL = new URL(process.env.APP_URL);
+const SUPABASE_ORIGIN = new URL(process.env.SUPABASE_URL).origin;
 const EXTRA_ORIGINS = parseExtraOrigins(process.env.ALLOWED_ORIGINS);
 const PORT = Number(process.env.PORT ?? 3000);
 
@@ -97,7 +98,7 @@ app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false 
 app.use((_req, res, next) => {
   const nonce = randomBytes(18).toString("base64");
   res.locals.cspNonce = nonce;
-  res.setHeader("Content-Security-Policy", `default-src 'self'; script-src 'self' 'nonce-${nonce}'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://cloudflare-dns.com https://dns.google; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'`);
+  res.setHeader("Content-Security-Policy", `default-src 'self'; script-src 'self' 'nonce-${nonce}'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: ${SUPABASE_ORIGIN}; connect-src 'self' https://cloudflare-dns.com https://dns.google; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'`);
   res.setHeader("Vary", "Origin");
   next();
 });
@@ -106,6 +107,7 @@ app.use((req, res, next) => {
   // Strict (objects/arrays only) for every route, EXCEPT /api/v1: public
   // operation inputs may be top-level JSON primitives (strings, numbers,
   // booleans) — e.g. base64.encode takes a raw JSON string body.
+  if (req.path === "/api/account/avatar") return next(); // raw image bytes, parsed by express.raw in the route
   express.json({ limit: "1mb", strict: !req.path.startsWith("/api/v1/") })(req, res, next);
 });
 app.use(cookieParser());
@@ -473,6 +475,29 @@ app.post("/api/auth/metadata", authLimit, requireOrigin, requireCsrf, requireSes
  * ------------------------------------------------------------------ */
 
 app.use("/api/account", accountLimit, requireOrigin, requireCsrf, requireSession);
+
+/* Avatar upload: raw image bytes -> Supabase Storage via service role only
+   (no storage policies for anon/authenticated). One object per user. */
+const AVATAR_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+app.post("/api/account/avatar", express.raw({ type: AVATAR_TYPES, limit: "1mb" }), requireOrigin, requireCsrf, requireSession, accountLimit, async (req, res) => {
+  const contentType = String(req.headers["content-type"] ?? "");
+  if (!AVATAR_TYPES.includes(contentType)) return res.status(415).json({ error: "Unsupported image type. Use PNG, JPEG, WebP or GIF." });
+  if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: "Empty upload." });
+  try {
+    const objectPath = `${req.devutils.user.id}/avatar`;
+    const upload = await service.storage.from("avatars").upload(objectPath, req.body, { contentType, upsert: true });
+    if (upload.error) return sendError(res, upload.error, "Avatar upload failed.");
+    const { data } = service.storage.from("avatars").getPublicUrl(objectPath);
+    const avatarUrl = data?.publicUrl ?? "";
+    if (!avatarUrl) return res.status(500).json({ error: "Could not resolve the avatar URL." });
+    const update = await service.from("profiles").update({ avatar_url: avatarUrl, updated_at: new Date().toISOString() }).eq("user_id", req.devutils.user.id);
+    if (update.error) return sendError(res, update.error, "Could not attach the avatar to your profile.");
+    await audit(req.devutils.user.id, "avatar_updated", {});
+    res.json({ avatarUrl });
+  } catch (error) {
+    sendError(res, error, "Avatar upload failed.");
+  }
+});
 
 app.get("/api/account/profile", async (req, res) => {
   const result = await userDb(req.devutils.access).from("profiles")
