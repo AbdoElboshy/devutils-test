@@ -479,7 +479,7 @@ app.use("/api/account", accountLimit, requireOrigin, requireCsrf, requireSession
 /* Avatar upload: raw image bytes -> Supabase Storage via service role only
    (no storage policies for anon/authenticated). One object per user. */
 const AVATAR_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
-app.post("/api/account/avatar", express.raw({ type: AVATAR_TYPES, limit: "1mb" }), requireOrigin, requireCsrf, requireSession, accountLimit, async (req, res) => {
+app.post("/api/account/avatar", express.raw({ type: AVATAR_TYPES, limit: "5mb" }), requireOrigin, requireCsrf, requireSession, accountLimit, async (req, res) => {
   const contentType = String(req.headers["content-type"] ?? "");
   if (!AVATAR_TYPES.includes(contentType)) return res.status(415).json({ error: "Unsupported image type. Use PNG, JPEG, WebP or GIF." });
   if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: "Empty upload." });
