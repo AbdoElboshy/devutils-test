@@ -42,6 +42,34 @@ async function mintKey(name, scopes) {
   return { secret, keyHash, id: data?.[0]?.id ?? null, userId };
 }
 
+/* Session helpers: cookie jar + CSRF double-submit, mirroring the browser. */
+function jarCookie(jar) {
+  return Object.entries(jar).map(([name, value]) => `${name}=${value}`).join("; ");
+}
+function absorbCookies(jar, res) {
+  const lines = typeof res.headers?.getSetCookie === "function" ? res.headers.getSetCookie() : [];
+  for (const line of lines) {
+    const pair = line.split(";")[0];
+    const eq = pair.indexOf("=");
+    if (eq > 0) jar[pair.slice(0, eq).trim()] = pair.slice(eq + 1);
+  }
+}
+async function sreq(method, path, { jar, origin: originHeader, csrf, body } = {}) {
+  try {
+    const headers = {};
+    const cookie = jarCookie(jar);
+    if (cookie) headers.Cookie = cookie;
+    if (originHeader) headers.Origin = originHeader;
+    if (csrf) headers["x-csrf-token"] = csrf;
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+    const res = await fetch(BASE + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    absorbCookies(jar, res);
+    let json = null;
+    try { json = await res.json(); } catch { /* non-JSON */ }
+    return { status: res.status, headers: res.headers, json };
+  } catch { return { status: 0, headers: null, json: null }; }
+}
+
 async function revokeByHash(keyHash) {
   const { data } = await service.from("api_keys").update({ revoked_at: new Date().toISOString() }).eq("key_hash", keyHash).is("revoked_at", null).select("name");
   return (data ?? []).length === 1;
@@ -160,6 +188,62 @@ ok("team row inserted (teams table exists)", !tIns.error && Boolean(teamId), tIn
 const tmIns = teamId ? await service.from("team_members").insert({ team_id: teamId, user_id: full.userId, role: "owner" }) : { error: "no team id" };
 ok("team_members row inserted (member table exists)", !tmIns.error, tmIns.error?.message ?? "");
 
+console.log("13) Session + CSRF (real login through the app's own routes)");
+const jar = {};
+const origin = new URL(BASE).origin;
+const stamp = startTs.replace(/[^0-9]/g, "");
+let r2 = await sreq("GET", "/api/auth/csrf", { jar });
+ok("csrf token minted (double-submit pair)", r2.status === 200 && typeof r2.json?.token === "string" && Boolean(jar.du_csrf));
+const csrf = r2.json?.token ?? "";
+const smokeEmail = `smoke-${stamp}@example.invalid`;
+const memberEmail = `smoke-m-${stamp}@example.invalid`;
+const smokePassword = "du_smoke_" + randomBytes(18).toString("base64url");
+const mkMain = await service.auth.admin.createUser({ email: smokeEmail, password: smokePassword, email_confirm: true });
+const mkMember = await service.auth.admin.createUser({ email: memberEmail, password: smokePassword, email_confirm: true });
+const smokeUserId = mkMain.data?.user?.id ?? null;
+const memberId = mkMember.data?.user?.id ?? null;
+ok("throwaway owner + member users created (auth admin API)", Boolean(smokeUserId && memberId), mkMain.error?.message ?? mkMember.error?.message ?? "");
+const { error: profOwnerErr } = await service.from("profiles").upsert({ user_id: smokeUserId, plan_id: "team" }, { onConflict: "user_id" });
+const { error: profMemberErr } = await service.from("profiles").upsert({ user_id: memberId }, { onConflict: "user_id" });
+ok("profiles rows ready (owner on the team plan)", !profOwnerErr && !profMemberErr, profOwnerErr?.message ?? profMemberErr?.message ?? "");
+r2 = await sreq("POST", "/api/auth/login", { jar, origin, csrf, body: { email: smokeEmail, password: smokePassword } });
+ok("login -> 200 and session cookies set", r2.status === 200 && Boolean(jar.du_access), `got ${r2.status} ${r2.json?.error ?? ""}`);
+r2 = await sreq("GET", "/api/auth/me", { jar });
+ok("session is live: /api/auth/me returns the throwaway user", r2.status === 200 && r2.json?.user?.id === smokeUserId);
+
+console.log("14) Teams flows (session-authed: plan gate + role rules)");
+r2 = await sreq("GET", "/api/account/teams", { jar });
+ok("teams list with session -> 200, empty", r2.status === 200 && r2.json?.teams?.length === 0, `got ${r2.status}`);
+r2 = await sreq("POST", "/api/account/teams", { jar, origin, csrf, body: { name: "Smoke Team" } });
+const liveTeamId = r2.json?.team?.id ?? null;
+ok("team created on the team plan -> 200", r2.status === 200 && Boolean(liveTeamId), `got ${r2.status} ${r2.json?.error ?? ""}`);
+r2 = await sreq("GET", "/api/account/teams", { jar });
+const listed = (r2.json?.teams ?? []).find((t) => t.id === liveTeamId);
+ok("team listed with owner role and memberCount 1", listed?.role === "owner" && listed?.memberCount === 1);
+r2 = await sreq("POST", `/api/account/teams/${liveTeamId}/members`, { jar, origin, csrf, body: { userId: memberId } });
+ok("member added by user id -> 200", r2.status === 200, `got ${r2.status} ${r2.json?.error ?? ""}`);
+r2 = await sreq("DELETE", `/api/account/teams/${liveTeamId}/members/${smokeUserId}`, { jar, origin, csrf });
+ok("last owner cannot leave their team -> 400", r2.status === 400, `got ${r2.status}`);
+r2 = await sreq("DELETE", `/api/account/teams/${liveTeamId}/members/${memberId}`, { jar, origin, csrf });
+ok("owner removes the member -> 200", r2.status === 200, `got ${r2.status} ${r2.json?.error ?? ""}`);
+const { error: downgradeErr } = await service.from("profiles").update({ plan_id: "free" }).eq("user_id", smokeUserId);
+r2 = await sreq("POST", "/api/account/teams", { jar, origin, csrf, body: { name: "Blocked Team" } });
+ok("free plan cannot create teams -> 403", !downgradeErr && r2.status === 403, `got ${r2.status}`);
+
+console.log("15) Admin session flows (real admin grant -> admin routes + audit)");
+const { error: admErr } = await service.from("admin_users").insert({ user_id: smokeUserId, role: "admin" });
+ok("admin role granted to the throwaway user", !admErr, admErr?.message ?? "");
+r2 = await sreq("GET", "/api/admin/users", { jar });
+ok("admin users list -> 200 and contains our user", r2.status === 200 && JSON.stringify(r2.json ?? {}).includes(smokeUserId), `got ${r2.status}`);
+r2 = await sreq("PUT", `/api/admin/users/${smokeUserId}/plan`, { jar, origin, csrf, body: { planId: "pro" } });
+ok("admin plan change -> 200", r2.status === 200, `got ${r2.status} ${r2.json?.error ?? ""}`);
+const { data: planCheck } = await service.from("profiles").select("plan_id").eq("user_id", smokeUserId).single();
+ok("plan really changed to pro in the DB", planCheck?.plan_id === "pro", `got ${planCheck?.plan_id}`);
+const { data: auditRows } = await service.from("audit_logs").select("id").eq("user_id", smokeUserId).eq("action", "plan_changed").limit(1);
+ok("plan_changed audit row recorded (p12 constraint live)", (auditRows ?? []).length === 1);
+r2 = await sreq("GET", "/api/admin/api-stats", { jar });
+ok("api-stats -> 200 for an admin session", r2.status === 200, `got ${r2.status}`);
+
 // Cleanup: revoke the read-only key, delete only THIS run's usage rows.
 await revokeByHash(readOnly.keyHash);
 const { error: delErr } = await service.from("usage_records").delete().in("resource_id", ["api:v1", "api:v1:workflow"]).gte("recorded_at", startTs);
@@ -171,6 +255,14 @@ const rateKeyIds = [full.id, readOnly.id].filter(Boolean);
 if (rateKeyIds.length) await service.from("rate_limit_hits").delete().in("key_id", rateKeyIds);
 console.log(delErr ? "cleanup: usage rows left in place (" + delErr.message + ")" : "cleanup: smoke usage + rate-limit rows deleted, read-only key revoked");
 console.log(wfDelErr ? "cleanup: smoke workflow row left in place (" + wfDelErr.message + ")" : "cleanup: smoke workflow row deleted");
+
+if (smokeUserId) {
+  await service.from("admin_users").delete().eq("user_id", smokeUserId);
+  if (liveTeamId) await service.from("teams").delete().eq("id", liveTeamId);
+  const { error: delUserErr } = await service.auth.admin.deleteUser(smokeUserId);
+  console.log(delUserErr ? "cleanup: throwaway owner left in place (" + delUserErr.message + ")" : "cleanup: throwaway owner user deleted");
+}
+if (memberId) await service.auth.admin.deleteUser(memberId);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
