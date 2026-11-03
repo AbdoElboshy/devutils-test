@@ -147,6 +147,50 @@ function createMemoryUsage() {
   };
 }
 
+/* ---------- p11 batch 0: throttle for the public OpenAPI document ---------- */
+
+/** In-memory sliding window for GET /api/v1/openapi.json: 60/min per IP.
+    Fail-open when no IP is available. Unit-tested. */
+export const DOC_WINDOW_MS = 60_000;
+export const DOC_WINDOW_MAX = 60;
+const docBuckets = new Map(); // ip -> timestamps
+
+export function allowDoc(ip, now = Date.now()) {
+  if (typeof ip !== "string" || !ip) return { ok: true };
+  const hits = (docBuckets.get(ip) ?? []).filter((t) => now - t < DOC_WINDOW_MS);
+  if (hits.length >= DOC_WINDOW_MAX) {
+    docBuckets.set(ip, hits);
+    return { ok: false, retryAfterMs: DOC_WINDOW_MS - (now - hits[0]) };
+  }
+  hits.push(now);
+  docBuckets.set(ip, hits);
+  return { ok: true };
+}
+
+/* ---------- p12: saved-workflow helpers (unit-tested) ---------- */
+
+/** Defensive step normalization for gateway execution: only steps with a
+    plausible operationId survive, config must be a plain object, max 50. */
+export function normalizeWorkflowSteps(steps) {
+  if (!Array.isArray(steps)) return [];
+  return steps
+    .filter((step) => step && typeof step === "object" && typeof step.operationId === "string" && step.operationId.length > 0 && step.operationId.length <= 200)
+    .slice(0, 50)
+    .map((step) => ({ operationId: step.operationId, config: step.config && typeof step.config === "object" && !Array.isArray(step.config) ? step.config : undefined }));
+}
+
+/** Public shape of a saved-workflow row (steps sanitized). */
+export function publicWorkflow(row) {
+  return {
+    id: String(row.id ?? ""),
+    name: String(row.name ?? ""),
+    description: String(row.description ?? ""),
+    steps: normalizeWorkflowSteps(row.steps),
+    source: String(row.source ?? "custom"),
+    updatedAt: String(row.updated_at ?? ""),
+  };
+}
+
 /* ---------- mount ---------- */
 
 function corsHeaders(res) {
@@ -205,9 +249,13 @@ export function mountApiV1(app, { service, usage, planOf, rate }) {
   app.options("/api/v1/operations", (_req, res) => { corsHeaders(res); res.status(204).end(); });
   app.options("/api/v1/operations/:id/execute", (_req, res) => { corsHeaders(res); res.status(204).end(); });
   app.options("/api/v1/usage", (_req, res) => { corsHeaders(res); res.status(204).end(); });
+  app.options("/api/v1/workflows", (_req, res) => { corsHeaders(res); res.status(204).end(); });
+  app.options("/api/v1/workflows/:id/execute", (_req, res) => { corsHeaders(res); res.status(204).end(); });
 
-  app.get("/api/v1/openapi.json", (_req, res) => {
+  app.get("/api/v1/openapi.json", (req, res) => {
     corsHeaders(res);
+    const doc = allowDoc(req.ip);
+    if (!doc.ok) return res.status(429).set("Retry-After", String(Math.ceil(doc.retryAfterMs / 1000))).json({ error: "Too many requests for the OpenAPI document." });
     if (!openApiDoc) return res.status(503).json({ error: "OpenAPI document unavailable." });
     res.type("application/json").send(openApiDoc);
   });
@@ -235,6 +283,67 @@ export function mountApiV1(app, { service, usage, planOf, rate }) {
       res.json({ ok: true, plan: planId, limit, remaining: limit === null ? null : Math.max(0, limit - used), used, month: monthKey() });
     } catch {
       res.status(502).json({ error: "Usage lookup unavailable." });
+    }
+  });
+
+  app.get("/api/v1/workflows", async (req, res) => {
+    const key = await authenticate(req, res, "workflows:execute");
+    if (!key) return;
+    corsHeaders(res);
+    try {
+      const r = await service.from("saved_workflows").select("id,name,description,steps,source,updated_at").eq("user_id", key.userId).order("updated_at", { ascending: false });
+      if (r.error) throw r.error;
+      res.json({ ok: true, workflows: (r.data ?? []).map(publicWorkflow), count: (r.data ?? []).length });
+    } catch {
+      res.status(502).json({ error: "Workflow lookup unavailable." });
+    }
+  });
+
+app.post("/api/v1/workflows/:id/execute", async (req, res) => {
+    const key = await authenticate(req, res, "workflows:execute");
+    if (!key) return;
+    corsHeaders(res);
+
+const rate = await rateVerdict(rateStore, key.id);
+    if (!rate.ok) return res.status(429).set("Retry-After", String(Math.ceil(rate.retryAfterMs / 1000))).json({ error: "Rate limit exceeded: 30 requests per minute per key." });
+
+if (!executeOperation) return res.status(503).json({ error: "Executor unavailable. Run 'npm run build:server-ops' and restart." });
+
+try {
+      const planId = await planLimitOf(key.userId);
+      const limit = API_V1_PLAN_LIMITS[planId] ?? API_V1_PLAN_LIMITS.free;
+      const used = await usageStore.read(key.userId);
+      const quota = checkMonthlyQuota(limit, used);
+      if (!quota.ok) return res.status(429).json({ error: quota.error, limit: quota.limit, used: quota.used });
+
+const wf = await service.from("saved_workflows").select("id,steps").eq("id", String(req.params.id).slice(0, 200)).eq("user_id", key.userId).maybeSingle();
+      if (wf.error) throw wf.error;
+      if (!wf.data) return res.status(404).json({ error: "Unknown workflow." });
+      const steps = normalizeWorkflowSteps(wf.data.steps);
+      if (!steps.length) return res.status(400).json({ error: "Workflow has no valid steps." });
+
+const startedAt = new Date().toISOString();
+      const results = [];
+      let value = req.body;
+      for (let i = 0; i < steps.length; i++) {
+        const t0 = Date.now();
+        try {
+          value = await executeOperation({ operationId: steps[i].operationId, input: value, config: steps[i].config });
+        } catch (error) {
+          const status = apiV1ErrorStatus(error);
+          if (status >= 500) console.error("[DevUtils] /api/v1 workflow step failed:", error instanceof Error ? error.message : error);
+          const message = `Workflow failed at step ${i + 1} (${steps[i].operationId}): ${status === 404 ? "Unknown operation." : status === 413 ? "Step input exceeds the operation's size limit." : status === 400 ? (error?.message ?? "Invalid input.") : "Execution failed."}`;
+          return res.status(status).json({ error: message });
+        }
+        results.push({ operationId: steps[i].operationId, output: value, durationMs: Math.max(0, Date.now() - t0) });
+      }
+      await usageStore.count(key.userId);
+      try { await usageStore.countMetric?.(key.userId, "workflow_runs"); } catch { /* non-fatal */ }
+      touchLastUsed(key.id, service);
+      res.json({ ok: true, workflowId: wf.data.id, startedAt, completedAt: new Date().toISOString(), steps: results, output: value });
+    } catch (error) {
+      console.error("[DevUtils] /api/v1 workflow execute failed:", error instanceof Error ? error.message : error);
+      res.status(502).json({ error: "Workflow execution unavailable." });
     }
   });
 

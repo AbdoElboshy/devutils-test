@@ -1224,6 +1224,13 @@ mountApiV1(app, {
       const r = await service.from("usage_records").insert({ user_id: userId, metric: "api_requests", quantity: 1, resource_id: "api:v1" });
       if (r.error) console.error("[DevUtils] /api/v1 usage write failed:", r.error.code ?? r.error.message);
     },
+    /* Optional metric writer so gateway workflow runs also show up as
+       "Workflow runs" on the account Usage page. Best-effort. */
+    async countMetric(userId, metric) {
+      const safeMetric = ["workflow_runs", "api_requests"].includes(metric) ? metric : "api_requests";
+      const r = await service.from("usage_records").insert({ user_id: userId, metric: safeMetric, quantity: 1, resource_id: "api:v1:workflow" });
+      if (r.error) console.error("[DevUtils] /api/v1 metric write failed:", r.error.code ?? r.error.message);
+    },
   },
   /* DB-backed sliding-window rate limiter for /api/v1 execute (p11).
      One row per accepted execute; rows older than the 60s window are pruned

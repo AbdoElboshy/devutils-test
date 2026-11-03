@@ -39,7 +39,7 @@ async function mintKey(name, scopes) {
   const keyHash = createHash("sha256").update(secret).digest("hex");
   const { data, error } = await service.from("api_keys").insert({ user_id: userId, name, prefix: secret.slice(0, 16), key_hash: keyHash, scopes }).select("id");
   if (error) throw new Error("mint failed: " + error.message);
-  return { secret, keyHash, id: data?.[0]?.id ?? null };
+  return { secret, keyHash, id: data?.[0]?.id ?? null, userId };
 }
 
 async function revokeByHash(keyHash) {
@@ -54,7 +54,7 @@ ok("server reachable", r.status !== 0);
 
 console.log("1) OpenAPI document (public)");
 ok("openapi.json is public 200", r.status === 200);
-ok("document is 3.1.0 with 3 paths", r.json?.openapi === "3.1.0" && Object.keys(r.json?.paths ?? {}).length === 3);
+ok("document is 3.1.0 with 5 paths", r.json?.openapi === "3.1.0" && Object.keys(r.json?.paths ?? {}).length === 5);
 
 console.log("2) Auth failures");
 r = await req("GET", "/api/v1/operations");
@@ -73,7 +73,7 @@ const doc = (await req("GET", "/api/v1/openapi.json")).json;
 r = await req("POST", "/api/v1/operations/openapi.validate/execute", { key: full.secret, body: doc });
 ok("openapi.validate -> ok, no issues", r.status === 200 && r.json?.ok === true && r.json?.output?.ok === true && (r.json?.output?.issues ?? []).length === 0);
 r = await req("POST", "/api/v1/operations/openapi.requests/execute", { key: full.secret, body: doc });
-ok("openapi.requests lists the 3 documented ops", r.status === 200 && r.json?.output?.length === 3);
+ok("openapi.requests lists the 5 documented ops", r.status === 200 && r.json?.output?.length === 5);
 
 console.log("5) Execute + DB-backed usage counter");
 r = await req("GET", "/api/v1/usage", { key: full.secret });
@@ -92,6 +92,20 @@ console.log("7) Scope enforcement");
 const readOnly = await mintKey("smoke-read-only", ["tools:read"]);
 r = await req("POST", "/api/v1/operations/base64.encode/execute", { key: readOnly.secret, body: "x" });
 ok("read-only key -> 403", r.status === 403 && /scope/.test(r.json?.error ?? ""));
+
+console.log("7b) Workflows (workflows:execute scope)");
+const wfKey = await mintKey("smoke-wf-key", ["workflows:execute"]);
+const wfId = `smoke-wf-${Date.now()}`;
+const wfIns = await service.from("saved_workflows").insert({ id: wfId, user_id: wfKey.userId, name: "smoke wf", description: "", steps: [{ operationId: "base64.encode" }, { operationId: "base64.decode" }], source: "custom", version: 1, updated_at: new Date().toISOString() });
+ok("smoke workflow inserted", !wfIns.error, wfIns.error?.message ?? "");
+r = await req("GET", "/api/v1/workflows", { key: full.secret });
+ok("key without workflows scope -> 403", r.status === 403);
+r = await req("GET", "/api/v1/workflows", { key: wfKey.secret });
+ok("workflow list -> 200 with our workflow", r.status === 200 && Array.isArray(r.json?.workflows) && r.json.workflows.some((w) => w.id === wfId));
+r = await req("POST", `/api/v1/workflows/${wfId}/execute`, { key: wfKey.secret, body: "smoke" });
+ok("workflow execute round-trips the input", r.status === 200 && r.json?.ok === true && r.json?.output === "smoke" && r.json?.steps?.length === 2);
+r = await req("POST", "/api/v1/workflows/does-not-exist/execute", { key: wfKey.secret, body: "x" });
+ok("unknown workflow -> 404", r.status === 404 && /Unknown workflow/.test(r.json?.error ?? ""));
 
 console.log("8) Rate limit (30 executes/min per key)");
 let saw429 = false;
@@ -119,10 +133,13 @@ ok("revoked key -> 401 'revoked'", r.status === 401 && /revoked/.test(r.json?.er
 
 // Cleanup: revoke the read-only key, delete only THIS run's usage rows.
 await revokeByHash(readOnly.keyHash);
-const { error: delErr } = await service.from("usage_records").delete().eq("resource_id", "api:v1").gte("recorded_at", startTs);
+const { error: delErr } = await service.from("usage_records").delete().in("resource_id", ["api:v1", "api:v1:workflow"]).gte("recorded_at", startTs);
+await revokeByHash(wfKey.keyHash);
+const { error: wfDelErr } = await service.from("saved_workflows").delete().eq("id", wfId);
 const rateKeyIds = [full.id, readOnly.id].filter(Boolean);
 if (rateKeyIds.length) await service.from("rate_limit_hits").delete().in("key_id", rateKeyIds);
 console.log(delErr ? "cleanup: usage rows left in place (" + delErr.message + ")" : "cleanup: smoke usage + rate-limit rows deleted, read-only key revoked");
+console.log(wfDelErr ? "cleanup: smoke workflow row left in place (" + wfDelErr.message + ")" : "cleanup: smoke workflow row deleted");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -386,7 +386,7 @@ ok("collection item without target rejected", () => assert.equal(safeCollectionI
 
 /* ---------------- Phase 10 API v1: auth, rate limit, quota, errors ---------------- */
 import {
-  parseBearer, hashApiKey, authzKey, allowRate, checkMonthlyQuota, apiV1ErrorStatus, API_V1_PLAN_LIMITS, monthKey, decideRate,
+  parseBearer, hashApiKey, authzKey, allowRate, checkMonthlyQuota, apiV1ErrorStatus, API_V1_PLAN_LIMITS, monthKey, decideRate, normalizeWorkflowSteps, publicWorkflow, allowDoc,
 } from "../server/api-v1.mjs";
 
 ok("parseBearer accepts a du_live key", () => assert.equal(parseBearer("Bearer du_live_abc123"), "du_live_abc123"));
@@ -462,6 +462,43 @@ ok("p11: decideRate clamps retryAfter to at least one second", () => assert.equa
 ok("p11: decideRate clamps retryAfter to the window length", () => {
   const now = Date.now();
   assert.equal(decideRate(30, now, now).retryAfterMs, 60000);
+});
+
+/* ---------------- p12: workflow helpers + doc throttle ---------------- */
+ok("p12: normalizeWorkflowSteps keeps valid steps with object config", () => {
+  const steps = normalizeWorkflowSteps([{ operationId: "base64.encode", config: { padding: false } }, { operationId: "json.format" }]);
+  assert.equal(steps.length, 2);
+  assert.deepEqual(steps[0].config, { padding: false });
+  assert.equal(steps[1].config, undefined);
+});
+ok("p12: normalizeWorkflowSteps drops malformed steps", () => {
+  const steps = normalizeWorkflowSteps([null, 42, "x", {}, { operationId: "" }, { operationId: "a".repeat(201) }, { operationId: "base64.encode" }]);
+  assert.equal(steps.length, 1);
+  assert.equal(steps[0].operationId, "base64.encode");
+});
+ok("p12: normalizeWorkflowSteps caps at 50 steps", () => {
+  const steps = normalizeWorkflowSteps(Array.from({ length: 80 }, (_, i) => ({ operationId: `op.${i}` })));
+  assert.equal(steps.length, 50);
+  assert.equal(steps[49].operationId, "op.49");
+});
+ok("p12: normalizeWorkflowSteps rejects array config and non-arrays", () => {
+  assert.deepEqual(normalizeWorkflowSteps([{ operationId: "x", config: [1, 2] }]), [{ operationId: "x", config: undefined }]);
+  assert.deepEqual(normalizeWorkflowSteps("nope"), []);
+  assert.deepEqual(normalizeWorkflowSteps(undefined), []);
+});
+ok("p12: allowDoc permits up to 60 per IP then blocks", () => {
+  const ip = `ip${Date.now()}`;
+  for (let i = 0; i < 60; i++) assert.equal(allowDoc(ip, 1000 + i).ok, true);
+  const blocked = allowDoc(ip, 2000);
+  assert.equal(blocked.ok, false);
+  assert.ok(blocked.retryAfterMs > 0 && blocked.retryAfterMs <= 60000);
+});
+ok("p12: allowDoc window slides and fail-opens without IP", () => {
+  const ip = `ip2${Date.now()}`;
+  for (let i = 0; i < 60; i++) allowDoc(ip, 1000 + i);
+  assert.equal(allowDoc(ip, 61001).ok, true);
+  assert.equal(allowDoc(undefined).ok, true);
+  assert.equal(allowDoc("").ok, true);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);
