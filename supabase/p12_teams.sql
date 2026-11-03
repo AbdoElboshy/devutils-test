@@ -43,7 +43,7 @@ begin
   -- (The live constraint contains actions beyond the repo migration, e.g.
   -- tool_visibility_changed — every existing member must be preserved.)
   if c is not null then
-    for rec in select (regexp_matches(def, $$([^']+)$$, 'g'))[1] as action loop
+    for rec in select (regexp_matches(def, $q$([^']+)$q$, 'g'))[1] as action loop
       members := array_append(members, rec.action);
     end loop;
     execute format('alter table public.audit_logs drop constraint %I', c);
