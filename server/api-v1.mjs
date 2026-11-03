@@ -328,7 +328,8 @@ const startedAt = new Date().toISOString();
       for (let i = 0; i < steps.length; i++) {
         const t0 = Date.now();
         try {
-          value = await executeOperation({ operationId: steps[i].operationId, input: value, config: steps[i].config });
+          const stepResult = await executeOperation({ operationId: steps[i].operationId, input: value, config: steps[i].config });
+          value = stepResult.output;
         } catch (error) {
           const status = apiV1ErrorStatus(error);
           if (status >= 500) console.error("[DevUtils] /api/v1 workflow step failed:", error instanceof Error ? error.message : error);
