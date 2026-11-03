@@ -144,8 +144,9 @@ const { data: planRow } = await service.from("profiles").select("plan_id").eq("u
 const originalPlan = planRow?.plan_id ?? "free";
 const { error: setUpErr } = await service.from("profiles").update({ plan_id: "pro" }).eq("user_id", full.userId);
 ok("plan set to pro in DB", !setUpErr, setUpErr?.message ?? "");
-r = await req("GET", "/api/v1/usage", { key: full.secret });
-ok("gateway usage reflects the pro plan", r.json?.plan === "pro", `got ${r.json?.plan}`);
+const planKey = await mintKey("smoke-plan-key", ["tools:read"]);
+r = await req("GET", "/api/v1/usage", { key: planKey.secret });
+ok("gateway usage reflects the pro plan", r.status === 200 && r.json?.plan === "pro", `got ${r.json?.plan}`);
 const { error: setBackErr } = await service.from("profiles").update({ plan_id: originalPlan }).eq("user_id", full.userId);
 ok("original plan restored", !setBackErr, setBackErr?.message ?? "");
 
@@ -153,6 +154,7 @@ ok("original plan restored", !setBackErr, setBackErr?.message ?? "");
 await revokeByHash(readOnly.keyHash);
 const { error: delErr } = await service.from("usage_records").delete().in("resource_id", ["api:v1", "api:v1:workflow"]).gte("recorded_at", startTs);
 await revokeByHash(wfKey.keyHash);
+await revokeByHash(planKey.keyHash);
 const { error: wfDelErr } = await service.from("saved_workflows").delete().eq("id", wfId);
 const rateKeyIds = [full.id, readOnly.id].filter(Boolean);
 if (rateKeyIds.length) await service.from("rate_limit_hits").delete().in("key_id", rateKeyIds);
