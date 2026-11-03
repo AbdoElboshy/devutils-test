@@ -187,7 +187,10 @@ function userDb(access) {
   });
 }
 function sendError(res, error, fallback = "Request failed.") {
-  if (!production) console.error(error instanceof Error ? error.message : error);
+  /* Log guarded details in every environment — the profile-save 500 was
+     invisible for days because errors only printed outside production.
+     error.code/message only: never tokens, bodies, or secrets. */
+  console.error(`[DevUtils] request failed: ${error?.code ?? ""} ${error?.message ?? error}`);
   res.status(upstreamStatus(error)).json({ error: fallback });
 }
 

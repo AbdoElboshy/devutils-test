@@ -14,11 +14,18 @@
 -- nothing new, no column widening, and nothing for the anon role.
 -- Admin/analytics/override tables intentionally stay ungranted
 -- (gateway-only, service role).
+--
+-- 2026-11-03 fix: the profiles INSERT grant now includes updated_at.
+-- The account profile route upserts a row whose insert list always
+-- contains updated_at, and Postgres requires INSERT privilege on every
+-- column in the insert list — missing one column fails the whole upsert
+-- with 42501 "permission denied for table profiles" even when the row
+-- already exists.
 
 begin;
 
 grant select on public.profiles to authenticated;
-grant insert(user_id, display_name, avatar_url, timezone, locale, theme, preferences) on public.profiles to authenticated;
+grant insert(user_id, display_name, avatar_url, timezone, locale, theme, preferences, updated_at) on public.profiles to authenticated;
 grant update(display_name, avatar_url, timezone, locale, theme, preferences, updated_at) on public.profiles to authenticated;
 grant select, insert, delete on public.favorites to authenticated;
 grant select, insert, update, delete on public.recent_tools, public.saved_workflows, public.saved_presets to authenticated;
