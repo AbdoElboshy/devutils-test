@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode, useRef } from "react";
-import { AlertTriangle, Bookmark, Download, FolderOpen, Gauge, KeyRound, LogOut, Pin, Settings, Shield, Star, Trash2, Upload, UserRound, Users, Workflow as WorkflowIcon , Loader2, ImagePlus, Camera} from "lucide-react";
+import { AlertTriangle, Bookmark, Download, FolderOpen, Gauge, KeyRound, LogOut, Pin, Settings, Shield, Star, Trash2, Upload, UserRound, Users, Workflow as WorkflowIcon , Loader2, Camera} from "lucide-react";
 import { platform, type ApiKeyMetadata, type AuditLog, type Collection, type CollectionItem, type Favorite, type PinnedTool, type Profile, type SavedPreset, type SavedWorkflow, type UsageSummary, type User } from "../platform";
 import { useAuth } from "../platform/auth-context";
 import { TOOL_MAP, type Tool } from "../lib/registry";
