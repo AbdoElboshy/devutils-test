@@ -6,6 +6,7 @@
  * Run: sudo node --env-file=/etc/devutils/devutils.env scripts/smoke-api-v1.mjs
  */
 import { createHash, randomBytes } from "node:crypto";
+import { execSync } from "node:child_process";
 import { createClient } from "@supabase/supabase-js";
 
 const BASE = process.env.SMOKE_BASE_URL ?? "http://localhost:3000";
@@ -36,9 +37,9 @@ async function mintKey(name, scopes) {
   if (!userId) throw new Error("No active key row to borrow a user_id from.");
   const secret = "du_live_" + randomBytes(32).toString("base64url");
   const keyHash = createHash("sha256").update(secret).digest("hex");
-  const { error } = await service.from("api_keys").insert({ user_id: userId, name, prefix: secret.slice(0, 16), key_hash: keyHash, scopes });
+  const { data, error } = await service.from("api_keys").insert({ user_id: userId, name, prefix: secret.slice(0, 16), key_hash: keyHash, scopes }).select("id");
   if (error) throw new Error("mint failed: " + error.message);
-  return { secret, keyHash };
+  return { secret, keyHash, id: data?.[0]?.id ?? null };
 }
 
 async function revokeByHash(keyHash) {
@@ -47,7 +48,8 @@ async function revokeByHash(keyHash) {
 }
 
 console.log("0) Preflight");
-let r = await req("GET", "/api/v1/openapi.json");
+let r = { status: 0, json: null };
+for (let i = 0; i < 20 && r.status === 0; i++) { r = await req("GET", "/api/v1/openapi.json"); if (r.status === 0) await new Promise((resolve) => setTimeout(resolve, 500)); }
 ok("server reachable", r.status !== 0);
 
 console.log("1) OpenAPI document (public)");
@@ -99,6 +101,17 @@ for (let i = 0; i < 32 && !saw429; i++) {
 }
 ok("429 triggered within the window", saw429);
 
+console.log("8b) Rate limit survives a server restart (DB-backed sliding window)");
+ok("429 precondition from section 8", saw429);
+let restarted = false;
+try { execSync("systemctl restart devutils", { stdio: "pipe" }); restarted = true; } catch { }
+ok("server restart executed", restarted);
+let up = false;
+for (let i = 0; i < 30 && !up; i++) { await new Promise((resolve) => setTimeout(resolve, 1000)); if ((await req("GET", "/api/v1/openapi.json")).status === 200) up = true; }
+ok("server back up after restart", up);
+r = await req("POST", "/api/v1/operations/base64.encode/execute", { key: full.secret, body: "post-restart" });
+ok("still rate-limited (429) after restart", r.status === 429);
+
 console.log("9) Revocation");
 ok("main key revoked in DB", await revokeByHash(full.keyHash));
 r = await req("GET", "/api/v1/operations", { key: full.secret });
@@ -107,7 +120,9 @@ ok("revoked key -> 401 'revoked'", r.status === 401 && /revoked/.test(r.json?.er
 // Cleanup: revoke the read-only key, delete only THIS run's usage rows.
 await revokeByHash(readOnly.keyHash);
 const { error: delErr } = await service.from("usage_records").delete().eq("resource_id", "api:v1").gte("recorded_at", startTs);
-console.log(delErr ? "cleanup: usage rows left in place (" + delErr.message + ")" : "cleanup: smoke usage rows deleted, read-only key revoked");
+const rateKeyIds = [full.id, readOnly.id].filter(Boolean);
+if (rateKeyIds.length) await service.from("rate_limit_hits").delete().in("key_id", rateKeyIds);
+console.log(delErr ? "cleanup: usage rows left in place (" + delErr.message + ")" : "cleanup: smoke usage + rate-limit rows deleted, read-only key revoked");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

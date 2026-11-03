@@ -386,7 +386,7 @@ ok("collection item without target rejected", () => assert.equal(safeCollectionI
 
 /* ---------------- Phase 10 API v1: auth, rate limit, quota, errors ---------------- */
 import {
-  parseBearer, hashApiKey, authzKey, allowRate, checkMonthlyQuota, apiV1ErrorStatus, API_V1_PLAN_LIMITS, monthKey,
+  parseBearer, hashApiKey, authzKey, allowRate, checkMonthlyQuota, apiV1ErrorStatus, API_V1_PLAN_LIMITS, monthKey, decideRate,
 } from "../server/api-v1.mjs";
 
 ok("parseBearer accepts a du_live key", () => assert.equal(parseBearer("Bearer du_live_abc123"), "du_live_abc123"));
@@ -445,6 +445,24 @@ ok("p11: gateway plan limits mirror src/platform/features.ts PLANS", () => {
 ok("p10b2db: monthKey formats January", () => assert.equal(monthKey(new Date(Date.UTC(2026, 0, 15))), "2026-01"));
 ok("p10b2db: monthKey formats December", () => assert.equal(monthKey(new Date(Date.UTC(2026, 11, 31))), "2026-12"));
 ok("p10b2db: monthKey year rollover", () => assert.equal(monthKey(new Date(Date.UTC(2027, 0, 1))), "2027-01"));
+
+/* ---------------- p11: DB-backed rate limiting (pure verdict) ---------------- */
+ok("p11: decideRate allows under the window max", () => assert.equal(decideRate(29, Date.now() - 5000).ok, true));
+ok("p11: decideRate blocks at the window max", () => {
+  const now = Date.now();
+  const verdict = decideRate(30, now - 5000, now);
+  assert.equal(verdict.ok, false);
+  assert.ok(verdict.retryAfterMs > 1000 && verdict.retryAfterMs <= 60000);
+});
+ok("p11: decideRate retryAfter shrinks as the oldest hit ages", () => {
+  const now = Date.now();
+  assert.ok(decideRate(30, now - 55000, now).retryAfterMs < decideRate(30, now - 1000, now).retryAfterMs);
+});
+ok("p11: decideRate clamps retryAfter to at least one second", () => assert.equal(decideRate(30, Date.now() - 59000).retryAfterMs, 1000));
+ok("p11: decideRate clamps retryAfter to the window length", () => {
+  const now = Date.now();
+  assert.equal(decideRate(30, now, now).retryAfterMs, 60000);
+});
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
