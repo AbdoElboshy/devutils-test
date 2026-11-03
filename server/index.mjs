@@ -488,7 +488,7 @@ app.post("/api/account/avatar", express.raw({ type: AVATAR_TYPES, limit: "5mb" }
     const upload = await service.storage.from("avatars").upload(objectPath, req.body, { contentType, upsert: true });
     if (upload.error) return sendError(res, upload.error, "Avatar upload failed.");
     const { data } = service.storage.from("avatars").getPublicUrl(objectPath);
-    const avatarUrl = data?.publicUrl ?? "";
+    const avatarUrl = `${data?.publicUrl ?? ""}?v=${Date.now()}`; // cache-bust: same object path, fresh URL
     if (!avatarUrl) return res.status(500).json({ error: "Could not resolve the avatar URL." });
     const update = await service.from("profiles").update({ avatar_url: avatarUrl, updated_at: new Date().toISOString() }).eq("user_id", req.devutils.user.id);
     if (update.error) return sendError(res, update.error, "Could not attach the avatar to your profile.");
