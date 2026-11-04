@@ -940,13 +940,7 @@ app.get("/api/admin/api-stats", (_req, res) => {
 /* p12: admin plan management. Plan of record is profiles.plan_id — the same
    column the gateway's planOf reads, so changes apply immediately. No payment
    provider is configured; no checkout exists by design. */
-app.get("/api/admin/users", requireRole("moderator"), async (_req, res) => {
-  try {
-    const r = await service.from("profiles").select("user_id,display_name,plan_id,created_at").order("created_at", { ascending: false }).limit(500);
-    if (r.error) return sendError(res, r.error, "User lookup unavailable.");
-    res.json({ users: r.data ?? [] });
-  } catch (error) { sendError(res, error, "User lookup unavailable."); }
-});
+
 
 app.put("/api/admin/users/:id/plan", requireRole("admin"), async (req, res) => {
   const userId = String(req.params.id).slice(0, 64);
