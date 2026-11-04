@@ -345,12 +345,15 @@ function UsageSection({ usage, user }: { usage: UsageSummary; user: User }) {
 
 type TeamRow = { id: string; name: string; created_at: string; role: "owner" | "admin" | "member"; memberCount: number };
 type TeamWorkflowRow = { id: string; name: string; description: string; steps: Array<{ id: string; operationId: string; label?: string }>; updated_at: string };
+type TeamMemberRow = { userId: string; role: "owner" | "admin" | "member"; displayName: string | null };
 
 function TeamsSection({ user }: { user: User }) {
   const [teams, setTeams] = useState<TeamRow[]>([]);
   const [name, setName] = useState("");
   const [memberId, setMemberId] = useState("");
   const [teamWfs, setTeamWfs] = useState<Record<string, TeamWorkflowRow[]>>({});
+  const [teamMembers, setTeamMembers] = useState<Record<string, TeamMemberRow[]>>({});
+  const [myWorkflows, setMyWorkflows] = useState<SavedWorkflow[]>([]);
   const [shareId, setShareId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -367,6 +370,13 @@ const load = useCallback(async () => {
         catch { return [team.id, []] as const; }
       }));
       setTeamWfs(Object.fromEntries(entries));
+      const memberEntries = await Promise.all(list.map(async (team) => {
+        try { return [team.id, (await apiFetch<{ members: TeamMemberRow[] }>(`/api/account/teams/${team.id}/members`)).members ?? []] as const; }
+        catch { return [team.id, []] as const; }
+      }));
+      setTeamMembers(Object.fromEntries(memberEntries));
+      try { const mine = await apiFetch<SavedWorkflow[]>("/api/account/workflows"); setMyWorkflows(Array.isArray(mine) ? mine : []); }
+      catch { setMyWorkflows([]); }
     }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Could not load teams."); }
   }, []);
@@ -397,6 +407,14 @@ return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Teams</
             <span className="rounded bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold capitalize text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{team.role}</span>
           </div>
           <p className="mt-0.5 text-[11.5px] text-zinc-400">{team.memberCount} member{team.memberCount === 1 ? "" : "s"}</p>
+          {(teamMembers[team.id] ?? []).length === 0 ? null : <div className="mt-2">
+            {(teamMembers[team.id] ?? []).map((m) => (
+              <div key={m.userId} className="mt-1 flex items-center justify-between gap-2">
+                <span className="text-[12.5px]"><span className="font-medium">{m.displayName ?? "Unnamed member"}</span>{m.userId === user.id ? <span className="text-zinc-400"> (you)</span> : null} <span className="ml-1 rounded bg-zinc-100 px-1.5 py-0.5 text-[10.5px] font-semibold capitalize text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{m.role}</span></span>
+                {m.userId !== user.id && (team.role === "owner" || (team.role === "admin" && m.role === "member")) ? <Btn variant="danger" className="py-1" disabled={busy} onClick={() => { if (confirm(`Remove ${m.displayName ?? "this member"} from the team?`)) void act(async () => { await apiFetch(`/api/account/teams/${team.id}/members/${m.userId}`, { method: "DELETE" }); }); }}>Remove</Btn> : null}
+              </div>
+            ))}
+          </div>}
           {team.role !== "member" ? <div className="mt-2 flex gap-2">
             <input type="email" className="w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-1.5 text-[13px] outline-none focus:border-emerald-500 dark:border-zinc-700" placeholder="member@example.com" value={memberId} onChange={(event) => setMemberId(event.target.value)} />
             <Btn disabled={busy || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(memberId.trim())} onClick={() => { const email = memberId.trim(); void act(async () => { await apiFetch(`/api/account/teams/${team.id}/members`, { method: "POST", body: JSON.stringify({ email }) }); }); setMemberId(""); }}>Add</Btn>
@@ -417,8 +435,11 @@ return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Teams</
               </div>
             ))}
             {team.role !== "member" ? <div className="mt-2 flex gap-2">
-              <input className="w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-1.5 text-[13px] outline-none focus:border-emerald-500 dark:border-zinc-700" placeholder="Your workflow id to share" value={shareId} onChange={(event) => setShareId(event.target.value)} />
-              <Btn disabled={busy || !shareId.trim()} onClick={() => { const id = shareId.trim(); void act(async () => { const mine = await apiFetch<SavedWorkflow[]>("/api/account/workflows"); const wf = (Array.isArray(mine) ? mine : []).find((row) => row.id === id); if (!wf) throw new Error(`No personal workflow with id ${id}.`); await apiFetch(`/api/account/teams/${team.id}/workflows/${id}`, { method: "PUT", body: JSON.stringify({ name: wf.name, description: wf.description, steps: wf.steps }) }); }); setShareId(""); }}>Share</Btn>
+              <select className="w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-1.5 text-[13px] outline-none focus:border-emerald-500 dark:border-zinc-700" value={shareId} onChange={(event) => setShareId(event.target.value)}>
+                <option value="">Select one of your workflows…</option>
+                {myWorkflows.map((wf) => <option key={wf.id} value={wf.id}>{wf.name}</option>)}
+              </select>
+              <Btn disabled={busy || !shareId.trim()} onClick={() => { const id = shareId.trim(); const wf = myWorkflows.find((row) => row.id === id); if (!wf) { setError("Pick one of your workflows first."); return; } void act(async () => { await apiFetch(`/api/account/teams/${team.id}/workflows/${id}`, { method: "PUT", body: JSON.stringify({ name: wf.name, description: wf.description, steps: wf.steps }) }); }); setShareId(""); }}>Share</Btn>
             </div> : null}
           </div>
         </div>
