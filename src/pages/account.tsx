@@ -383,7 +383,7 @@ async function act(request: () => Promise<unknown>) {
 if (!enabled) return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Teams</h2><p className="mt-3 rounded-xl border border-dashed border-zinc-300 p-4 text-[13px] leading-relaxed text-zinc-500 dark:border-zinc-700">Team workspaces are available on the team and enterprise plans. Your current plan: <span className="font-semibold capitalize">{user.planId}</span>. An administrator can change plans from the admin console.</p></Panel>;
 
 return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Teams</h2>
-    <p className="mt-1 text-[12.5px] text-zinc-500">Member limit on this plan: {memberLimit === null ? "unlimited" : memberLimit}. Members are added by user id (see the admin users list).</p>
+    <p className="mt-1 text-[12.5px] text-zinc-500">Member limit on this plan: {memberLimit === null ? "unlimited" : memberLimit}. Members are added by their account email address.</p>
     {error ? <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-[12.5px] text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">{error}</div> : null}
     <div className="mt-4 flex gap-2">
       <input className="w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-1.5 text-[13px] outline-none focus:border-emerald-500 dark:border-zinc-700" placeholder="New team name" value={name} onChange={(event) => setName(event.target.value)} />
@@ -398,8 +398,8 @@ return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Teams</
           </div>
           <p className="mt-0.5 text-[11.5px] text-zinc-400">{team.memberCount} member{team.memberCount === 1 ? "" : "s"}</p>
           {team.role !== "member" ? <div className="mt-2 flex gap-2">
-            <input className="w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-1.5 text-[13px] outline-none focus:border-emerald-500 dark:border-zinc-700" placeholder="User id to add" value={memberId} onChange={(event) => setMemberId(event.target.value)} />
-            <Btn disabled={busy || memberId.trim().length !== 36} onClick={() => { const id = memberId.trim(); void act(async () => { await apiFetch(`/api/account/teams/${team.id}/members`, { method: "POST", body: JSON.stringify({ userId: id }) }); }); }}>Add</Btn>
+            <input type="email" className="w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-1.5 text-[13px] outline-none focus:border-emerald-500 dark:border-zinc-700" placeholder="member@example.com" value={memberId} onChange={(event) => setMemberId(event.target.value)} />
+            <Btn disabled={busy || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(memberId.trim())} onClick={() => { const email = memberId.trim(); void act(async () => { await apiFetch(`/api/account/teams/${team.id}/members`, { method: "POST", body: JSON.stringify({ email }) }); }); setMemberId(""); }}>Add</Btn>
           </div> : null}
           <div className="mt-2 flex gap-2">
             <Btn disabled={busy} onClick={() => void act(async () => { await apiFetch(`/api/account/teams/${team.id}/members/${user.id}`, { method: "DELETE" }); })}>Leave</Btn>
