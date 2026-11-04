@@ -951,6 +951,8 @@ app.put("/api/admin/users/:id/plan", requireRole("admin"), async (req, res) => {
     const r = await service.from("profiles").update({ plan_id: planId, updated_at: new Date().toISOString() }).eq("user_id", userId).select("user_id,plan_id").maybeSingle();
     if (r.error) return sendError(res, r.error, "Plan update failed.");
     if (!r.data) return res.status(404).json({ error: "Unknown user." });
+    const { error: metaError } = await service.auth.admin.updateUserById(userId, { app_metadata: { plan_id: planId } });
+    if (metaError) return sendError(res, metaError, "Plan metadata update failed.");
     if (!(await recordAdminAuditOrRespond(res, req.devutils.user.id, "plan_changed", { user_id: userId, plan_id: planId }))) return;
     res.json({ ok: true, userId, planId });
   } catch (error) { sendError(res, error, "Plan update failed."); }
