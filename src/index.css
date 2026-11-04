@@ -104,3 +104,5 @@ body {
 }
 
 ::selection { background: #16a34a33; }
+
+select option { color: #18181b; background-color: #ffffff; }

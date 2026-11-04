@@ -429,7 +429,7 @@ return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Teams</
               <div key={wf.id} className="mt-1 flex items-center justify-between gap-2">
                 <span className="text-[12.5px] font-medium">{wf.name}</span>
                 <span className="flex gap-1">
-                  <Btn disabled={busy} onClick={() => { void act(async () => { await apiFetch(`/api/account/workflows/${wf.id}`, { method: "PUT", body: JSON.stringify({ name: `${wf.name} (team copy)`.slice(0, 100), description: wf.description, steps: wf.steps }) }); }); }}>Copy to mine</Btn>
+                  <Btn disabled={busy} onClick={() => { if (busy) return; const copyName = `${wf.name} (team copy)`.slice(0, 100); if (myWorkflows.some((row) => row.name === copyName)) { setError(`You already have "${copyName}" in your workflows.`); return; } void act(async () => { await apiFetch(`/api/account/workflows/${wf.id}`, { method: "PUT", body: JSON.stringify({ name: copyName, description: wf.description, steps: wf.steps }) }); }); }}>Copy to mine</Btn>
                   {team.role !== "member" ? <Btn disabled={busy} onClick={() => { void act(async () => { await apiFetch(`/api/account/teams/${team.id}/workflows/${wf.id}`, { method: "DELETE" }); }); }}><Trash2 size={13} /></Btn> : null}
                 </span>
               </div>
@@ -439,7 +439,7 @@ return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Teams</
                 <option value="">Select one of your workflows…</option>
                 {myWorkflows.map((wf) => <option key={wf.id} value={wf.id}>{wf.name}</option>)}
               </select>
-              <Btn disabled={busy || !shareId.trim()} onClick={() => { const id = shareId.trim(); const wf = myWorkflows.find((row) => row.id === id); if (!wf) { setError("Pick one of your workflows first."); return; } void act(async () => { await apiFetch(`/api/account/teams/${team.id}/workflows/${id}`, { method: "PUT", body: JSON.stringify({ name: wf.name, description: wf.description, steps: wf.steps }) }); }); setShareId(""); }}>Share</Btn>
+              <Btn disabled={busy || !shareId.trim()} onClick={() => { if (busy) return; const id = shareId.trim(); const wf = myWorkflows.find((row) => row.id === id); if (!wf) { setError("Pick one of your workflows first."); return; } void act(async () => { await apiFetch(`/api/account/teams/${team.id}/workflows/${id}`, { method: "PUT", body: JSON.stringify({ name: wf.name, description: wf.description, steps: wf.steps }) }); }); setShareId(""); }}>Share</Btn>
             </div> : null}
           </div>
         </div>
