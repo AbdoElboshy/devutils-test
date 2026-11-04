@@ -235,6 +235,7 @@ const { error: admErr } = await service.from("admin_users").insert({ user_id: sm
 ok("admin role granted to the throwaway user", !admErr, admErr?.message ?? "");
 r2 = await sreq("GET", "/api/admin/users", { jar });
 ok("admin users list -> 200 and contains our user", r2.status === 200 && JSON.stringify(r2.json ?? {}).includes(smokeUserId), `got ${r2.status}`);
+ok("admin users list includes planId", r2.status === 200 && Array.isArray(r2.json?.users) && r2.json.users.every((row) => typeof row.planId === "string"), "planId missing from user rows");
 r2 = await sreq("PUT", `/api/admin/users/${smokeUserId}/plan`, { jar, origin, csrf, body: { planId: "pro" } });
 ok("admin plan change -> 200", r2.status === 200, `got ${r2.status} ${r2.json?.error ?? ""}`);
 const { data: planCheck } = await service.from("profiles").select("plan_id").eq("user_id", smokeUserId).single();

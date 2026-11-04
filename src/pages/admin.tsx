@@ -11,6 +11,7 @@ import {
   saveToolOverride, setFeatureFlag, setUserRole, suspendUser, type AdminAnalytics, type AdminFlag,
   type AdminHealth, type AdminRegistry, type AdminUser, type AdminUsersPage, type AuditEntry,
   type CategoryOverlay, type ToolOverlay, type ToolVersion,
+  setUserPlan,
 } from "../platform/admin-api";
 import { applyRegistryOverlays, CATEGORIES, loadRegistryOverlays } from "../lib/registry";
 import { downloadFile } from "../lib/engine";
@@ -757,7 +758,7 @@ export { applyRegistryOverlays };
 
 /* ------------------------------ Users (Phase 6) ------------------------------ */
 
-type UserConfirmKind = "suspend" | "reactivate" | "revoke-access" | "role-assign" | "role-revoke";
+type UserConfirmKind = "suspend" | "reactivate" | "revoke-access" | "role-assign" | "role-revoke" | "plan-assign";
 type UserConfirm = { kind: UserConfirmKind; user: AdminUser } | null;
 
 function UsersManager() {
@@ -772,6 +773,7 @@ function UsersManager() {
   const [confirm, setConfirm] = useState<UserConfirm>(null);
   const [confirmText, setConfirmText] = useState("");
   const [roleChoice, setRoleChoice] = useState("moderator");
+  const [planChoice, setPlanChoice] = useState("team");
   const pageSize = 25;
 
   const load = useCallback(async () => {
@@ -850,6 +852,7 @@ function UsersManager() {
                 <th scope="col" className="px-3 py-2 font-bold">User</th>
                 <th scope="col" className="px-3 py-2 font-bold">Status</th>
                 <th scope="col" className="px-3 py-2 font-bold">Admin role</th>
+                <th scope="col" className="px-3 py-2 font-bold">Plan</th>
                 <th scope="col" className="px-3 py-2 text-right font-bold">Actions</th>
               </tr>
             </thead>
@@ -870,11 +873,15 @@ function UsersManager() {
                     </td>
                     <td className="px-3 py-2.5 font-mono text-[12px]">{u.role ?? <span className="text-zinc-400">—</span>}</td>
                     <td className="px-3 py-2.5">
+                      <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-bold capitalize text-sky-700 dark:bg-sky-950/40 dark:text-sky-300">{u.planId}</span>
+                    </td>
+                    <td className="px-3 py-2.5">
                       <div className="flex flex-wrap items-center justify-end gap-1">
                         {u.suspended
                           ? <button type="button" disabled={self} onClick={() => setConfirm({ kind: "reactivate", user: u })} className="rounded-md border border-zinc-200 px-2 py-1 text-[12px] font-medium disabled:opacity-40 dark:border-zinc-700">Reactivate</button>
                           : <button type="button" disabled={self} onClick={() => setConfirm({ kind: "suspend", user: u })} className="rounded-md border border-zinc-200 px-2 py-1 text-[12px] font-medium text-amber-700 disabled:opacity-40 dark:border-zinc-700 dark:text-amber-400">Suspend</button>}
                         <button type="button" disabled={self} onClick={() => setConfirm({ kind: "revoke-access", user: u })} className="rounded-md border border-zinc-200 px-2 py-1 text-[12px] font-medium disabled:opacity-40 dark:border-zinc-700">Revoke sessions</button>
+                        <button type="button" disabled={self} onClick={() => { setPlanChoice(u.planId ?? "free"); setConfirm({ kind: "plan-assign", user: u }); }} className="rounded-md border border-zinc-200 px-2 py-1 text-[12px] font-medium disabled:opacity-40 dark:border-zinc-700">Set plan</button>
                         {isSuperAdmin && (
                           <>
                             <button type="button" disabled={self} onClick={() => { setRoleChoice(u.role ?? "moderator"); setConfirm({ kind: "role-assign", user: u }); }} className="rounded-md border border-zinc-200 px-2 py-1 text-[12px] font-medium disabled:opacity-40 dark:border-zinc-700">Set role</button>
@@ -887,7 +894,7 @@ function UsersManager() {
                 );
               })}
               {!loading && (data?.users ?? []).length === 0 && (
-                <tr><td colSpan={4} className="px-3 py-8 text-center text-zinc-500">No users match the current filters.</td></tr>
+                <tr><td colSpan={5} className="px-3 py-8 text-center text-zinc-500">No users match the current filters.</td></tr>
               )}
             </tbody>
           </table>
@@ -911,6 +918,7 @@ function UsersManager() {
               {confirm.kind === "revoke-access" && <> — signs out all their active sessions now; they can sign in again.</>}
               {confirm.kind === "role-revoke" && <> — removes administrative access immediately.</>}
               {confirm.kind === "reactivate" && <> — restores normal sign-in.</>}
+              {confirm.kind === "plan-assign" && <> — changes their subscription plan (free, pro, team, enterprise). They must sign out and back in for it to take effect.</>}
             </p>
             {confirm.kind === "role-assign" && (
               <Field label="Role">
@@ -918,6 +926,16 @@ function UsersManager() {
                   <option value="moderator">moderator (read-only)</option>
                   <option value="admin">admin (tools + users)</option>
                   <option value="super_admin">super_admin (roles + everything)</option>
+                </Select>
+              </Field>
+            )}
+            {confirm.kind === "plan-assign" && (
+              <Field label="Plan">
+                <Select value={planChoice} onChange={(e) => setPlanChoice(e.target.value)}>
+                  <option value="free">free</option>
+                  <option value="pro">pro</option>
+                  <option value="team">team</option>
+                  <option value="enterprise">enterprise</option>
                 </Select>
               </Field>
             )}
@@ -934,6 +952,7 @@ function UsersManager() {
                 if (confirm.kind === "reactivate") return void act(() => reactivateUser(confirm.user.id), `${target} reactivated.`);
                 if (confirm.kind === "revoke-access") return void act(() => revokeUserAccess(confirm.user.id), `Sessions revoked for ${target}.`);
                 if (confirm.kind === "role-assign") return void act(() => setUserRole(confirm.user.id, roleChoice), `Role ${roleChoice} assigned to ${target}.`);
+                if (confirm.kind === "plan-assign") return void act(() => setUserPlan(confirm.user.id, planChoice), `Plan ${planChoice} assigned to ${target}.`);
                 return void act(() => revokeUserRole(confirm.user.id), `Role removed for ${target}.`);
               }} className="rounded-lg bg-zinc-900 px-3 py-1.5 text-[13px] font-semibold text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900">Confirm</button>
             </div>
