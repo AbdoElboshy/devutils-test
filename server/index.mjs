@@ -714,9 +714,17 @@ app.get("/api/account/teams/:id/members", async (req, res) => {
 
 app.post("/api/account/teams/:id/members", async (req, res) => {
   const teamId = String(req.params.id).slice(0, 64);
-  const userId = String(req.body?.userId ?? "").trim();
+  const email = String(req.body?.email ?? "").trim().slice(0, 254);
+  let userId = String(req.body?.userId ?? "").trim();
   const role = ["admin", "member"].includes(req.body?.role) ? String(req.body.role) : "member";
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) return res.status(400).json({ error: "userId must be a user id (uuid). Find ids in the admin users list." });
+  if (email) {
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: "Enter a valid email address." });
+    const found = await service.rpc("find_user_by_email", { p_email: email });
+    if (found.error) return sendError(res, found.error, "Member lookup unavailable.");
+    userId = String(found.data ?? "").trim();
+    if (!userId) return res.status(404).json({ error: "No account with that email. Ask them to sign up first." });
+  }
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) return res.status(400).json({ error: "Provide the member's email address." });
   try {
     const me = await service.from("team_members").select("role").eq("team_id", teamId).eq("user_id", req.devutils.user.id).maybeSingle();
     if (me.error) return sendError(res, me.error, "Member add failed.");
