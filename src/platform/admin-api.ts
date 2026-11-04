@@ -89,6 +89,7 @@ export type AdminUser = {
   bannedUntil: string | null;
   suspended: boolean;
   role: string | null;
+  planId: string;
 };
 export type AdminUsersPage = { users: AdminUser[]; total: number; authTotal: number; page: number; pageSize: number };
 
@@ -114,6 +115,10 @@ export async function setUserRole(id: string, role: string): Promise<unknown> {
 }
 export async function revokeUserRole(id: string): Promise<unknown> {
   return apiFetch(`/api/admin/users/${encodeURIComponent(id)}/role`, { method: "DELETE" });
+}
+
+export async function setUserPlan(id: string, planId: string): Promise<unknown> {
+  return apiFetch(`/api/admin/users/${encodeURIComponent(id)}/plan`, { method: "PUT", body: JSON.stringify({ planId }) });
 }
 
 /* ---------------- Phase 6 WS C/D: flags + version history ---------------- */

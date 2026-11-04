@@ -313,6 +313,7 @@ const ADMIN_ROUTE_GATES = [
   { route: "DELETE /api/admin/tools/:id", min: "admin" },
   { route: "PUT /api/admin/users/:id/role", min: "super_admin" },
   { route: "DELETE /api/admin/users/:id/role", min: "super_admin" },
+  { route: "PUT /api/admin/users/:id/plan", min: "admin" },
   { route: "GET /api/admin/tools/:id/history", min: "moderator" },
   { route: "POST /api/admin/tools/:id/restore", min: "admin" },
   { route: "GET /api/admin/flags", min: "moderator" },

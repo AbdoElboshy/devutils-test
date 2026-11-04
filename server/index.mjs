@@ -1238,6 +1238,9 @@ app.get("/api/admin/users", requireRole("admin"), async (req, res) => {
     const page = Math.max(1, Math.min(50, Number(req.query.page ?? 1) || 1));
     const pageSize = Math.max(10, Math.min(100, Number(req.query.pageSize ?? 25) || 25));
     const roles = await loadActiveAdminRoles();
+    const plansRes = await service.from("profiles").select("user_id,plan_id");
+    if (plansRes.error) return sendError(res, plansRes.error, "User listing unavailable.");
+    const plans = new Map((plansRes.data ?? []).map((row) => [row.user_id, row.plan_id ?? "free"]));
     // Bounded fan-out: at most 5 pages x 100 users covers current platform scale.
     const all = [];
     let total = 0;
@@ -1257,6 +1260,7 @@ app.get("/api/admin/users", requireRole("admin"), async (req, res) => {
       bannedUntil: u.banned_until ?? null,
       suspended: Boolean(u.banned_until && new Date(u.banned_until) > new Date()),
       role: roles.get(u.id) ?? null,
+      planId: plans.get(u.id) ?? "free",
     }));
     if (query) users = users.filter((u) => (u.email ?? "").toLowerCase().includes(query) || u.id.toLowerCase().includes(query));
     if (status === "suspended") users = users.filter((u) => u.suspended);
