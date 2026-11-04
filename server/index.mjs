@@ -692,6 +692,26 @@ app.post("/api/account/teams", async (req, res) => {
   } catch (error) { sendError(res, error, "Team creation failed."); }
 });
 
+/* p12b: member roster for the team management UI. Members-only;
+   display names come from profiles (no emails in the roster, by design). */
+app.get("/api/account/teams/:id/members", async (req, res) => {
+  const teamId = String(req.params.id).slice(0, 64);
+  try {
+    const me = await service.from("team_members").select("role").eq("team_id", teamId).eq("user_id", req.devutils.user.id).maybeSingle();
+    if (me.error) return sendError(res, me.error, "Member list unavailable.");
+    if (!me.data) return res.status(404).json({ error: "Unknown team." });
+    const rows = await service.from("team_members").select("user_id,role").eq("team_id", teamId);
+    if (rows.error) return sendError(res, rows.error, "Member list unavailable.");
+    const ids = (rows.data ?? []).map((row) => row.user_id);
+    const names = ids.length
+      ? await service.from("profiles").select("user_id,display_name").in("user_id", ids)
+      : { data: [], error: null };
+    if (names.error) return sendError(res, names.error, "Member list unavailable.");
+    const nameById = Object.fromEntries((names.data ?? []).map((row) => [row.user_id, row.display_name]));
+    res.json({ members: (rows.data ?? []).map((row) => ({ userId: row.user_id, role: row.role, displayName: nameById[row.user_id] ?? null })) });
+  } catch (error) { sendError(res, error, "Member list unavailable."); }
+});
+
 app.post("/api/account/teams/:id/members", async (req, res) => {
   const teamId = String(req.params.id).slice(0, 64);
   const userId = String(req.body?.userId ?? "").trim();
