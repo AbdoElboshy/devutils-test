@@ -1,4 +1,4 @@
-import { mountApiV1, createGatewayStats, normalizePlanId, planAllowsTeams, withinMemberLimit, canRemoveMember, canManageTeamWorkflows } from "./api-v1.mjs";
+import { mountApiV1, createGatewayStats, normalizePlanId, normalizeWorkflowSteps, planAllowsTeams, withinMemberLimit, canRemoveMember, canManageTeamWorkflows, checkMonthlyQuota, apiV1ErrorStatus, API_V1_PLAN_LIMITS, getExecuteOperation } from "./api-v1.mjs";
 import compression from "compression";
 import cookieParser from "cookie-parser";
 import express from "express";
@@ -591,6 +591,53 @@ for (const resource of ["workflows", "presets"]) {
 /* p13: team-scoped workflows. Any member can read and copy a shared
    workflow into their personal space (via the existing personal upsert
    route); owners and admins manage the shared copy. */
+/* p14: team-native execution. Any member may run a shared workflow;
+   quota and usage are attributed to the clicking member's plan, matching
+   the per-user gateway model (no owner-allowance piggybacking). */
+app.post("/api/account/teams/:id/workflows/:wfId/run", async (req, res) => {
+  const teamId = String(req.params.id).slice(0, 64);
+  const wfId = String(req.params.wfId).slice(0, 200);
+  const executeOperation = getExecuteOperation();
+  if (!executeOperation) return res.status(503).json({ error: "Executor unavailable. Run 'npm run build:server-ops' and restart." });
+  try {
+    const me = await service.from("team_members").select("role").eq("team_id", teamId).eq("user_id", req.devutils.user.id).maybeSingle();
+    if (me.error) return sendError(res, me.error, "Team workflow run failed.");
+    if (!me.data) return res.status(404).json({ error: "Unknown team." });
+    const wf = await service.from("team_workflows").select("id,steps").eq("team_id", teamId).eq("id", wfId).maybeSingle();
+    if (wf.error) return sendError(res, wf.error, "Team workflow run failed.");
+    if (!wf.data) return res.status(404).json({ error: "Unknown workflow." });
+    const steps = normalizeWorkflowSteps(wf.data.steps);
+    if (!steps.length) return res.status(400).json({ error: "Workflow has no valid steps." });
+    const planId = await planOfUser(req.devutils.user.id);
+    const limit = API_V1_PLAN_LIMITS[planId] ?? API_V1_PLAN_LIMITS.free;
+    const since = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString();
+    const usedRes = await userDb(req.devutils.access).from("usage_records").select("quantity").eq("metric", "workflow_runs").gte("recorded_at", since);
+    if (usedRes.error) throw usedRes.error;
+    const used = (usedRes.data ?? []).reduce((sum, row) => sum + Number(row.quantity ?? 0), 0);
+    const quota = checkMonthlyQuota(limit, used);
+    if (!quota.ok) return res.status(429).json({ error: quota.error, limit: quota.limit, used: quota.used });
+    const startedAt = new Date().toISOString();
+    const results = [];
+    let value = req.body?.input ?? "";
+    for (let i = 0; i < steps.length; i++) {
+      const t0 = Date.now();
+      try {
+        const stepResult = await executeOperation({ operationId: steps[i].operationId, input: value, config: steps[i].config });
+        value = stepResult.output;
+      } catch (error) {
+        const status = apiV1ErrorStatus(error);
+        if (status >= 500) console.error("[DevUtils] team workflow step failed:", error instanceof Error ? error.message : error);
+        const message = `Workflow failed at step ${i + 1} (${steps[i].operationId}): ${status === 404 ? "Unknown operation." : status === 413 ? "Step input exceeds the operation's size limit." : status === 400 ? (error?.message ?? "Invalid input.") : "Execution failed."}`;
+        return res.status(status).json({ error: message });
+      }
+      results.push({ operationId: steps[i].operationId, output: value, durationMs: Math.max(0, Date.now() - t0) });
+    }
+    try { await userDb(req.devutils.access).rpc("record_usage", { p_metric: "workflow_runs", p_quantity: 1, p_resource_id: `team-workflow:${wfId}` }); } catch { /* non-fatal */ }
+    await audit(req.devutils.user.id, "team_workflow_run", { team_id: teamId, id: wfId });
+    res.json({ ok: true, workflowId: wf.data.id, startedAt, completedAt: new Date().toISOString(), steps: results, output: value });
+  } catch (error) { sendError(res, error, "Team workflow run failed."); }
+});
+
 app.get("/api/account/teams/:id/workflows", async (req, res) => {
   const teamId = String(req.params.id).slice(0, 64);
   try {

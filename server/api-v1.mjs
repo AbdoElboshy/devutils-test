@@ -21,6 +21,8 @@ try {
   // dist bundle missing: endpoints answer 503 with an honest message.
 }
 
+export function getExecuteOperation() { return executeOperation; }
+
 import { upstreamStatus } from "./lib.mjs";
 import { readFileSync } from "node:fs";
 import path from "node:path";
