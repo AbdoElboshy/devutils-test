@@ -832,6 +832,9 @@ app.delete("/api/account/teams/:id/collections/:colId", async (req, res) => {
    the invite behaves exactly as before (link shown in the UI, no email sent).
    A failed send is logged, never fatal - the invite link always works. */
 async function sendInviteEmail({ to, inviteUrl, expiresAt }) {
+  /* RFC 2606 reserved domains (smoke tests use .invalid) - never deliverable, skip the send. */
+  const domain = (to.split("@")[1] || "").toLowerCase();
+  if (domain.endsWith(".invalid") || domain.endsWith(".test") || domain.endsWith(".example") || domain === "localhost") return false;
   const key = process.env.RESEND_API_KEY;
   if (!key) return false;
   try {
