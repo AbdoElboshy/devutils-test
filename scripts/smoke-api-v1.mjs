@@ -333,6 +333,7 @@ console.log("19) Invitations, ownership transfer, offboarding (p17)");
 r2 = await sreq("POST", `/api/account/teams/${tId}/invitations`, { jar, origin, csrf, body: { email: "ghost-smoke@example.invalid", role: "member" } });
 ok("owner can invite an email without an account -> 200", r2.status === 200 && Boolean(r2.json?.token), `got ${r2.status} ${r2.json?.error ?? ""}`);
 ok("invite response includes emailSent (p20)", typeof r2.json?.emailSent === "boolean", `got ${JSON.stringify(r2.json?.emailSent)}`);
+ok("no real email attempted for the reserved .invalid domain (p20.1)", r2.json?.emailSent === false, `got ${JSON.stringify(r2.json?.emailSent)}`);
 const ghostInviteId = r2.json?.id ?? null;
 r2 = await sreq("POST", `/api/account/teams/${tId}/invitations`, { jar, origin, csrf, body: { email: "ghost-smoke@example.invalid", role: "member" } });
 ok("duplicate pending invite -> 409", r2.status === 409, `got ${r2.status} ${r2.json?.error ?? ""}`);
