@@ -347,15 +347,43 @@ type TeamRow = { id: string; name: string; created_at: string; role: "owner" | "
 type TeamWorkflowRow = { id: string; name: string; description: string; steps: Array<{ id: string; operationId: string; label?: string }>; updated_at: string };
 type TeamMemberRow = { userId: string; role: "owner" | "admin" | "member"; displayName: string | null };
 
+/* p14: per-card run box for shared team workflows. Self-contained state so
+   the team panel stays simple; runs hit POST .../run (member-attributed quota). */
+function TeamWorkflowRunBox({ teamId, wfId }: { teamId: string; wfId: string }) {
+  const [input, setInput] = useState("");
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<{ output?: unknown; steps?: Array<{ operationId: string; durationMs: number }>; error?: string } | null>(null);
+  async function run() {
+    if (running) return;
+    setRunning(true);
+    try {
+      const r = await apiFetch<{ output?: unknown; steps?: Array<{ operationId: string; durationMs: number }> }>(`/api/account/teams/${teamId}/workflows/${wfId}/run`, { method: "POST", body: JSON.stringify({ input }) });
+      setResult({ output: r.output ?? null, steps: r.steps ?? [] });
+    } catch (cause) {
+      setResult({ error: cause instanceof Error ? cause.message : "Run failed." });
+    } finally {
+      setRunning(false);
+    }
+  }
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-1">
+      <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Run input" maxLength={100000} className="min-w-0 flex-1 rounded-md border border-zinc-200 bg-transparent px-2 py-1 text-[12px] dark:border-zinc-700" />
+      <Btn disabled={running} onClick={() => { void run(); }}>Run</Btn>
+      {result ? (
+        <div className="mt-1 w-full rounded-lg border border-zinc-200 p-2 text-[11.5px] dark:border-zinc-700">
+          {result.error ? <span className="font-medium text-red-600 dark:text-red-400">{result.error}</span> : <span className="break-all font-mono">{typeof result.output === "string" ? result.output : JSON.stringify(result.output ?? null)}</span>}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function TeamsSection({ user }: { user: User }) {
   const [teams, setTeams] = useState<TeamRow[]>([]);
   const [name, setName] = useState("");
   const [memberId, setMemberId] = useState("");
   const [teamWfs, setTeamWfs] = useState<Record<string, TeamWorkflowRow[]>>({});
   const [teamMembers, setTeamMembers] = useState<Record<string, TeamMemberRow[]>>({});
-  const [runInputs, setRunInputs] = useState<Record<string, string>>({});
-  const [running, setRunning] = useState<Record<string, boolean>>({});
-  const [runResults, setRunResults] = useState<Record<string, { output?: unknown; steps?: Array<{ operationId: string; durationMs: number }>; error?: string }>>({});
   const [myWorkflows, setMyWorkflows] = useState<SavedWorkflow[]>([]);
   const [shareId, setShareId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -429,12 +457,8 @@ return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Teams</
           <div className="mt-3 border-t border-zinc-100 pt-2 dark:border-zinc-800">
             <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-400">Shared workflows</p>
             {(teamWfs[team.id] ?? []).length === 0 ? <p className="mt-1 text-[12px] text-zinc-500">None yet.</p> : (teamWfs[team.id] ?? []).map((wf) => (
-              <div key={`${wf.id}-run`} className="mt-1 flex flex-wrap items-center gap-1">
-                  <input value={runInputs[wf.id] ?? ""} onChange={(e) => setRunInputs({ ...runInputs, [wf.id]: e.target.value })} placeholder="Run input" maxLength={100000} className="min-w-0 flex-1 rounded-md border border-zinc-200 bg-transparent px-2 py-1 text-[12px] dark:border-zinc-700" />
-                  <Btn disabled={Boolean(running[wf.id])} onClick={() => { if (running[wf.id]) return; setRunning({ ...running, [wf.id]: true }); void (async () => { try { const r = await apiFetch<{ output?: unknown; steps?: Array<{ operationId: string; durationMs: number }> }>(`/api/account/teams/${team.id}/workflows/${wf.id}/run`, { method: "POST", body: JSON.stringify({ input: runInputs[wf.id] ?? "" }) }); setRunResults({ ...runResults, [wf.id]: { output: r.output ?? null, steps: r.steps ?? [] } }); } catch (cause) { const message = cause instanceof Error ? cause.message : "Run failed."; setRunResults({ ...runResults, [wf.id]: { error: message } }); setError(message); } finally { setRunning({ ...running, [wf.id]: false }); } })(); }}>Run</Btn>
-                </div>
-                {runResults[wf.id] ? <div className="mt-1 rounded-lg border border-zinc-200 p-2 text-[11.5px] dark:border-zinc-700">{runResults[wf.id]?.error ? <span className="font-medium text-red-600 dark:text-red-400">{runResults[wf.id]?.error}</span> : <span className="break-all font-mono">{typeof runResults[wf.id]?.output === "string" ? runResults[wf.id]?.output : JSON.stringify(runResults[wf.id]?.output ?? null)}</span>}</div> : null}
-                <div key={wf.id} className="mt-1 flex items-center justify-between gap-2">
+                            <TeamWorkflowRunBox teamId={team.id} wfId={wf.id} />
+<div key={wf.id} className="mt-1 flex items-center justify-between gap-2">
                 <span className="text-[12.5px] font-medium">{wf.name}</span>
                 <span className="flex gap-1">
                   <Btn disabled={busy} onClick={() => { if (busy) return; const copyName = `${wf.name} (team copy)`.slice(0, 100); if (myWorkflows.some((row) => row.name === copyName)) { setError(`You already have "${copyName}" in your workflows.`); return; } void act(async () => { await apiFetch(`/api/account/workflows/${wf.id}`, { method: "PUT", body: JSON.stringify({ name: copyName, description: wf.description, steps: wf.steps }) }); }); }}>Copy to mine</Btn>
