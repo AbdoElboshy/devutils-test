@@ -404,6 +404,12 @@ ok("admin restores the plan -> 200", r2.status === 200, `got ${r2.status} ${r2.j
 const { data: be2 } = await service.from("billing_events").select("old_plan_id,new_plan_id").eq("user_id", smokeUserId).order("created_at", { ascending: false }).limit(1);
 ok("second ledger row records the restore", be2?.length === 1 && be2[0].new_plan_id === "team" && be2[0].old_plan_id === "pro", `got ${JSON.stringify(be2 ?? [])}`);
 
+console.log("21) Admin billing ledger (p19)");
+r = await req("GET", "/api/admin/billing");
+ok("admin billing requires an admin session", r.status === 401 || r.status === 403, `got ${r.status}`);
+r2 = await sreq("GET", "/api/admin/billing", { jar, origin, csrf });
+ok("admin billing lists our ledger rows", r2.status === 200 && Array.isArray(r2.json) && r2.json.some((e) => e.user_id === smokeUserId && e.new_plan_id === "pro"), `got ${r2.status} ${JSON.stringify(r2.json?.slice?.(0, 3) ?? [])}`);
+
 // Cleanup: revoke the read-only key, delete only THIS run's usage rows.
 await revokeByHash(readOnly.keyHash);
 const { error: delErr } = await service.from("usage_records").delete().in("resource_id", ["api:v1", "api:v1:workflow"]).gte("recorded_at", startTs);
