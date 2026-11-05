@@ -329,6 +329,61 @@ ok("owner deletes the shared collection -> 200", r2.status === 200, `got ${r2.st
 r2 = await sreq("GET", `/api/account/teams/${tId}/collections`, { jar, origin, csrf });
 ok("shared collection no longer listed", !(r2.json?.collections ?? []).some((c) => c.id === colId), `got ${r2.status}`);
 
+console.log("19) Invitations, ownership transfer, offboarding (p17)");
+r2 = await sreq("POST", `/api/account/teams/${tId}/invitations`, { jar, origin, csrf, body: { email: "ghost-smoke@example.invalid", role: "member" } });
+ok("owner can invite an email without an account -> 200", r2.status === 200 && Boolean(r2.json?.token), `got ${r2.status} ${r2.json?.error ?? ""}`);
+const ghostInviteId = r2.json?.id ?? null;
+let ghostHashOk = false;
+if (ghostInviteId) { const { data: gRow } = await service.from("team_invitations").select("token_hash,revoked_at,accepted_at").eq("id", ghostInviteId).maybeSingle(); ghostHashOk = Boolean(gRow?.token_hash) && gRow?.token_hash?.length === 64 && !gRow?.revoked_at && !gRow?.accepted_at; }
+ok("invitation row stored with a 64-char token hash", ghostHashOk);
+r2 = await sreq("POST", `/api/account/teams/${tId}/invitations`, { jar: mJar, origin, csrf: mCsrf, body: { email: "x@example.invalid", role: "member" } });
+ok("plain member cannot invite -> 403", r2.status === 403, `got ${r2.status}`);
+r2 = await sreq("POST", `/api/account/teams/${tId}/invitations`, { jar, origin, csrf, body: { email: memberEmail, role: "member" } });
+ok("owner invites the member's email -> 200", r2.status === 200 && Boolean(r2.json?.token), `got ${r2.status} ${r2.json?.error ?? ""}`);
+const inviteToken = r2.json?.token ?? "";
+r2 = await sreq("POST", `/api/account/invitations/${encodeURIComponent(inviteToken)}/accept`, { jar: mJar, origin, csrf: mCsrf });
+ok("member cannot accept while already a member -> 400", r2.status === 400, `got ${r2.status} ${r2.json?.error ?? ""}`);
+r2 = await sreq("DELETE", `/api/account/teams/${tId}/members/${memberId}`, { jar, origin, csrf });
+ok("owner removes the member -> 200", r2.status === 200, `got ${r2.status} ${r2.json?.error ?? ""}`);
+r2 = await sreq("GET", "/api/account/invitations", { jar: mJar, origin, csrf: mCsrf });
+ok("pending invitation is visible to the invited user", r2.status === 200 && (r2.json?.invitations ?? []).some((iv) => iv.teamId === tId), `got ${r2.status} ${JSON.stringify(r2.json?.invitations ?? [])}`);
+r2 = await sreq("POST", `/api/account/invitations/${encodeURIComponent(inviteToken)}/accept`, { jar: mJar, origin, csrf: mCsrf });
+ok("member accepts the invitation -> 200", r2.status === 200, `got ${r2.status} ${r2.json?.error ?? ""}`);
+const { data: rejoined } = await service.from("team_members").select("role").eq("team_id", tId).eq("user_id", memberId).maybeSingle();
+ok("member row restored with the invited role", rejoined?.role === "member", `got ${JSON.stringify(rejoined)}`);
+r2 = await sreq("POST", `/api/account/invitations/${encodeURIComponent(inviteToken)}/accept`, { jar: mJar, origin, csrf: mCsrf });
+ok("invitation token is single-use -> 400", r2.status === 400, `got ${r2.status} ${r2.json?.error ?? ""}`);
+r2 = await sreq("POST", `/api/account/invitations/${encodeURIComponent(ghostInviteId ?? "")}/accept`, { jar, origin, csrf });
+ok("another user cannot accept someone else's invitation -> 403", r2.status === 403, `got ${r2.status} ${r2.json?.error ?? ""}`);
+r2 = await sreq("POST", `/api/account/teams/${tId}/invitations`, { jar, origin, csrf, body: { email: memberEmail, role: "member" } });
+ok("owner creates a second invitation -> 200", r2.status === 200 && Boolean(r2.json?.token), `got ${r2.status}`);
+const invite2Token = r2.json?.token ?? "";
+const invite2Id = r2.json?.id ?? null;
+r2 = await sreq("DELETE", `/api/account/teams/${tId}/invitations/${invite2Id}`, { jar, origin, csrf });
+ok("owner revokes the invitation -> 200", r2.status === 200, `got ${r2.status} ${r2.json?.error ?? ""}`);
+let revokedOk = false;
+if (invite2Id) { const { data: rvRow } = await service.from("team_invitations").select("revoked_at").eq("id", invite2Id).maybeSingle(); revokedOk = Boolean(rvRow?.revoked_at); }
+ok("revoked_at set in the DB", revokedOk);
+r2 = await sreq("POST", `/api/account/invitations/${encodeURIComponent(invite2Token)}/accept`, { jar: mJar, origin, csrf: mCsrf });
+ok("member cannot accept the revoked invitation -> 410", r2.status === 410, `got ${r2.status} ${r2.json?.error ?? ""}`);
+r2 = await sreq("POST", `/api/account/teams/${tId}/owner`, { jar: mJar, origin, csrf: mCsrf, body: { userId: memberId } });
+ok("non-owner cannot transfer ownership -> 403", r2.status === 403, `got ${r2.status}`);
+r2 = await sreq("POST", `/api/account/teams/${tId}/owner`, { jar, origin, csrf, body: { userId: memberId } });
+ok("owner transfers ownership -> 200", r2.status === 200, `got ${r2.status} ${r2.json?.error ?? ""}`);
+const { data: teamAfter } = await service.from("teams").select("owner_user_id").eq("id", tId).maybeSingle();
+const { data: rolesAfter } = await service.from("team_members").select("user_id,role").eq("team_id", tId);
+const roleOf = (uid) => (rolesAfter ?? []).find((row) => row.user_id === uid)?.role;
+ok("ownership recorded: teams.owner_user_id swapped + roles exchanged", teamAfter?.owner_user_id === memberId && roleOf(memberId) === "owner" && roleOf(smokeUserId) === "admin", `owner=${teamAfter?.owner_user_id} old=${roleOf(smokeUserId)} new=${roleOf(memberId)}`);
+r2 = await sreq("POST", `/api/account/teams/${tId}/owner`, { jar, origin, csrf, body: { userId: smokeUserId } });
+ok("previous owner (now admin) cannot transfer -> 403", r2.status === 403, `got ${r2.status}`);
+const { data: invAudit } = await service.from("audit_logs").select("action,user_id").eq("action", "team_invitation_accepted").eq("user_id", memberId).gte("created_at", startTs);
+const { data: ownAudit } = await service.from("audit_logs").select("action").eq("action", "team_ownership_transferred").eq("user_id", smokeUserId).gte("created_at", startTs);
+ok("team_invitation_accepted + team_ownership_transferred audit rows recorded", (invAudit ?? []).length >= 1 && (ownAudit ?? []).length >= 1);
+r2 = await sreq("DELETE", `/api/account/teams/${tId}/members/${smokeUserId}`, { jar: mJar, origin, csrf: mCsrf });
+ok("new owner removes the previous owner (offboarding) -> 200", r2.status === 200, `got ${r2.status} ${r2.json?.error ?? ""}`);
+const { count: oldOwnerRows } = await service.from("team_members").select("user_id", { count: "exact", head: true }).eq("team_id", tId).eq("user_id", smokeUserId);
+ok("previous owner no longer in team_members", (oldOwnerRows ?? 0) === 0, `got ${oldOwnerRows}`);
+
 // Cleanup: revoke the read-only key, delete only THIS run's usage rows.
 await revokeByHash(readOnly.keyHash);
 const { error: delErr } = await service.from("usage_records").delete().in("resource_id", ["api:v1", "api:v1:workflow"]).gte("recorded_at", startTs);

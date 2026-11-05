@@ -822,6 +822,142 @@ app.delete("/api/account/teams/:id/collections/:colId", async (req, res) => {
   } catch (error) { sendError(res, error, "Team collection deletion failed."); }
 });
 
+/* p17: team invitations (token links, revocation, single-use accept with
+   email-match enforcement) and ownership transfer. Service-role access with
+   explicit per-route authorization, mirroring p13/p16. No email provider is
+   configured, so invites return a copyable link and also surface in the
+   invitee's in-app pending list. */
+app.post("/api/account/teams/:id/invitations", async (req, res) => {
+  const teamId = String(req.params.id).slice(0, 64);
+  const email = String(req.body?.email ?? "").trim().toLowerCase().slice(0, 254);
+  const role = ["admin", "member"].includes(req.body?.role) ? String(req.body.role) : "member";
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: "Enter a valid email address." });
+  try {
+    const me = await service.from("team_members").select("role").eq("team_id", teamId).eq("user_id", req.devutils.user.id).maybeSingle();
+    if (me.error) return sendError(res, me.error, "Invitation create failed.");
+    if (!me.data) return res.status(404).json({ error: "Unknown team." });
+    if (!["owner", "admin"].includes(me.data.role)) return res.status(403).json({ error: "Only team owners and admins can invite members." });
+    const planId = await planOfUser(req.devutils.user.id);
+    const members = await service.from("team_members").select("team_id", { count: "exact", head: true }).eq("team_id", teamId);
+    if (members.error) throw members.error;
+    const active = await service.from("team_invitations").select("id", { count: "exact", head: true })
+      .eq("team_id", teamId).is("revoked_at", null).is("accepted_at", null).gt("expires_at", new Date().toISOString());
+    if (active.error) throw active.error;
+    if (!withinMemberLimit(planId, (members.count ?? 0) + (active.count ?? 0))) return res.status(429).json({ error: "This plan's team member limit has been reached." });
+    const token = randomBytes(32).toString("base64url");
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    const ins = await service.from("team_invitations").insert({ team_id: teamId, email, role, token_hash: tokenHash, invited_by: req.devutils.user.id }).select("id,expires_at");
+    if (ins.error) return sendError(res, ins.error, "Invitation create failed.");
+    await audit(req.devutils.user.id, "team_invitation_created", { team_id: teamId });
+    res.json({ id: ins.data[0].id, email, role, expiresAt: ins.data[0].expires_at, token, inviteUrl: `${req.protocol}://${req.get("host")}/account?invite=${token}` });
+  } catch (error) { sendError(res, error, "Invitation create failed."); }
+});
+
+app.get("/api/account/teams/:id/invitations", async (req, res) => {
+  const teamId = String(req.params.id).slice(0, 64);
+  try {
+    const me = await service.from("team_members").select("role").eq("team_id", teamId).eq("user_id", req.devutils.user.id).maybeSingle();
+    if (me.error) return sendError(res, me.error, "Invitation list unavailable.");
+    if (!me.data) return res.status(404).json({ error: "Unknown team." });
+    if (!["owner", "admin"].includes(me.data.role)) return res.status(403).json({ error: "Only team owners and admins can list invitations." });
+    const r = await service.from("team_invitations").select("id,email,role,created_at,expires_at,revoked_at,accepted_at").eq("team_id", teamId).order("created_at", { ascending: false });
+    if (r.error) return sendError(res, r.error, "Invitation list unavailable.");
+    res.json({ invitations: r.data ?? [] });
+  } catch (error) { sendError(res, error, "Invitation list unavailable."); }
+});
+
+app.delete("/api/account/teams/:id/invitations/:inviteId", async (req, res) => {
+  const teamId = String(req.params.id).slice(0, 64);
+  const inviteId = String(req.params.inviteId).slice(0, 64);
+  try {
+    const me = await service.from("team_members").select("role").eq("team_id", teamId).eq("user_id", req.devutils.user.id).maybeSingle();
+    if (me.error) return sendError(res, me.error, "Invitation revoke failed.");
+    if (!me.data) return res.status(404).json({ error: "Unknown team." });
+    if (!["owner", "admin"].includes(me.data.role)) return res.status(403).json({ error: "Only team owners and admins can revoke invitations." });
+    const upd = await service.from("team_invitations").update({ revoked_at: new Date().toISOString() }).eq("id", inviteId).eq("team_id", teamId).is("revoked_at", null).is("accepted_at", null);
+    if (upd.error) return sendError(res, upd.error, "Invitation revoke failed.");
+    await audit(req.devutils.user.id, "team_invitation_revoked", { team_id: teamId, invitation_id: inviteId });
+    res.json({ ok: true });
+  } catch (error) { sendError(res, error, "Invitation revoke failed."); }
+});
+
+app.get("/api/account/invitations", async (req, res) => {
+  try {
+    const who = await service.auth.admin.getUserById(req.devutils.user.id);
+    const myEmail = String(who.data?.user?.email ?? "").toLowerCase();
+    if (!myEmail) return res.json({ invitations: [] });
+    const r = await service.from("team_invitations").select("id,team_id,role,expires_at")
+      .eq("email", myEmail).is("revoked_at", null).is("accepted_at", null).gt("expires_at", new Date().toISOString());
+    if (r.error) return sendError(res, r.error, "Invitation lookup unavailable.");
+    const rows = r.data ?? [];
+    const out = [];
+    for (const row of rows) {
+      const member = await service.from("team_members").select("user_id", { count: "exact", head: true }).eq("team_id", row.team_id).eq("user_id", req.devutils.user.id);
+      if (member.error || (member.count ?? 0) > 0) continue;
+      const team = await service.from("teams").select("name").eq("id", row.team_id).maybeSingle();
+      out.push({ id: row.id, teamId: row.team_id, teamName: team.data?.name ?? "A team", role: row.role, expiresAt: row.expires_at });
+    }
+    res.json({ invitations: out });
+  } catch (error) { sendError(res, error, "Invitation lookup unavailable."); }
+});
+
+app.post("/api/account/invitations/:ref/accept", async (req, res) => {
+  const ref = String(req.params.ref).slice(0, 128);
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ref);
+  try {
+    const inv = isUuid
+      ? await service.from("team_invitations").select("*").eq("id", ref).maybeSingle()
+      : await service.from("team_invitations").select("*").eq("token_hash", createHash("sha256").update(ref).digest("hex")).maybeSingle();
+    if (inv.error) return sendError(res, inv.error, "Invitation accept failed.");
+    if (!inv.data) return res.status(404).json({ error: "Unknown invitation." });
+    if (inv.data.revoked_at) return res.status(410).json({ error: "This invitation was revoked." });
+    if (inv.data.accepted_at) return res.status(400).json({ error: "This invitation was already used." });
+    if (new Date(inv.data.expires_at).getTime() <= Date.now()) return res.status(410).json({ error: "This invitation expired." });
+    const who = await service.auth.admin.getUserById(req.devutils.user.id);
+    const myEmail = String(who.data?.user?.email ?? "").toLowerCase();
+    if (!myEmail || myEmail !== String(inv.data.email).toLowerCase()) return res.status(403).json({ error: "This invitation was sent to a different email address." });
+    const already = await service.from("team_members").select("user_id").eq("team_id", inv.data.team_id).eq("user_id", req.devutils.user.id).maybeSingle();
+    if (already.error) return sendError(res, already.error, "Invitation accept failed.");
+    if (already.data) return res.status(400).json({ error: "You are already a member of this team." });
+    const team = await service.from("teams").select("owner_user_id").eq("id", inv.data.team_id).maybeSingle();
+    if (team.error || !team.data) return res.status(404).json({ error: "This team no longer exists." });
+    const planId = await planOfUser(team.data.owner_user_id);
+    const count = await service.from("team_members").select("team_id", { count: "exact", head: true }).eq("team_id", inv.data.team_id);
+    if (count.error) throw count.error;
+    if (!withinMemberLimit(planId, count.count ?? 0)) return res.status(429).json({ error: "This plan's team member limit has been reached." });
+    const ins = await service.from("team_members").insert({ team_id: inv.data.team_id, user_id: req.devutils.user.id, role: inv.data.role });
+    if (ins.error) return sendError(res, ins.error, "Invitation accept failed.");
+    const mark = await service.from("team_invitations").update({ accepted_at: new Date().toISOString() }).eq("id", inv.data.id);
+    if (mark.error) return sendError(res, mark.error, "Invitation accept failed.");
+    await audit(req.devutils.user.id, "team_invitation_accepted", { team_id: inv.data.team_id });
+    res.json({ ok: true, teamId: inv.data.team_id });
+  } catch (error) { sendError(res, error, "Invitation accept failed."); }
+});
+
+app.post("/api/account/teams/:id/owner", async (req, res) => {
+  const teamId = String(req.params.id).slice(0, 64);
+  const targetId = String(req.body?.userId ?? "").trim();
+  try {
+    const me = await service.from("team_members").select("role").eq("team_id", teamId).eq("user_id", req.devutils.user.id).maybeSingle();
+    if (me.error) return sendError(res, me.error, "Ownership transfer failed.");
+    if (!me.data) return res.status(404).json({ error: "Unknown team." });
+    if (me.data.role !== "owner") return res.status(403).json({ error: "Only the team owner can transfer ownership." });
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetId)) return res.status(400).json({ error: "Choose a member to transfer ownership to." });
+    if (targetId === req.devutils.user.id) return res.status(400).json({ error: "You already own this team." });
+    const target = await service.from("team_members").select("role").eq("team_id", teamId).eq("user_id", targetId).maybeSingle();
+    if (target.error) return sendError(res, target.error, "Ownership transfer failed.");
+    if (!target.data) return res.status(404).json({ error: "That user is not a member of this team." });
+    const upTeam = await service.from("teams").update({ owner_user_id: targetId, updated_at: new Date().toISOString() }).eq("id", teamId);
+    if (upTeam.error) return sendError(res, upTeam.error, "Ownership transfer failed.");
+    const upNew = await service.from("team_members").update({ role: "owner" }).eq("team_id", teamId).eq("user_id", targetId);
+    if (upNew.error) return sendError(res, upNew.error, "Ownership transfer failed.");
+    const upOld = await service.from("team_members").update({ role: "admin" }).eq("team_id", teamId).eq("user_id", req.devutils.user.id);
+    if (upOld.error) return sendError(res, upOld.error, "Ownership transfer failed.");
+    await audit(req.devutils.user.id, "team_ownership_transferred", { team_id: teamId, to_user_id: targetId });
+    res.json({ ok: true });
+  } catch (error) { sendError(res, error, "Ownership transfer failed."); }
+});
+
 app.get("/api/account/usage", async (req, res) => {
   const r = await userDb(req.devutils.access).rpc("get_usage_summary");
   if (r.error) return sendError(res, r.error);

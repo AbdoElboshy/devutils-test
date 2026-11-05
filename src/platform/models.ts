@@ -115,6 +115,10 @@ export type ActivityType =
   | "team_created"
   | "team_member_added"
   | "team_member_removed"
+  | "team_invitation_created"
+  | "team_invitation_revoked"
+  | "team_invitation_accepted"
+  | "team_ownership_transferred"
   | "team_deleted";
 
 export type AuditLog = {
