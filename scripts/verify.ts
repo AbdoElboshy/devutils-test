@@ -466,6 +466,9 @@ eq("AWS search", searchTools("aws arn", 20).some((hit) => hit.tool.id === "aws-a
   eq("routes: workflows enabled -> workflows", c("/workflows", true).kind, "workflows");
   eq("404: workflows disabled -> not-found", c("/workflows", false).kind, "not-found");
   eq("routes: login -> auth", c("/login").kind, "auth");
+  const adminBillingC = c("/admin/billing");
+  if (adminBillingC.kind !== "admin") throw new Error("expected admin classification for /admin/billing");
+  eq("routes: /admin/billing -> billing section (p19)", adminBillingC.section, "billing");
   const adminC = c("/admin/nonsense");
   if (adminC.kind !== "admin") throw new Error("expected admin classification");
   eq("routes: admin invalid section falls back to overview", adminC.section, "overview");
