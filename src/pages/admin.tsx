@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity, AlertTriangle, ArrowDownUp, Check, Download, Gauge, Layers, Lock,
-  Flag, Pencil, RefreshCw, Search, ShieldCheck, SlidersHorizontal, Trash2, Upload, Users, X,
+  CreditCard, Flag, Pencil, RefreshCw, Search, ShieldCheck, SlidersHorizontal, Trash2, Upload, Users, X,
 } from "lucide-react";
 import { useAuth } from "../platform/auth-context";
 import {
-  exportRegistry, fetchAdminAnalytics, fetchAdminAudit, fetchAdminFlags, fetchAdminHealth, fetchAdminMe,
+  exportRegistry, fetchAdminAnalytics, fetchAdminAudit, fetchAdminBilling, fetchAdminFlags, fetchAdminHealth, fetchAdminMe,
   fetchAdminRegistry, fetchAdminUsers, fetchToolHistory, importRegistry, reactivateUser, reorderTools,
   resetToolOverride, restoreToolVersion, revokeUserAccess, revokeUserRole, saveCategoryOverride,
   saveToolOverride, setFeatureFlag, setUserRole, suspendUser, type AdminAnalytics, type AdminFlag,
   type AdminHealth, type AdminRegistry, type AdminUser, type AdminUsersPage, type AuditEntry,
-  type CategoryOverlay, type ToolOverlay, type ToolVersion,
+  type BillingEventRow, type CategoryOverlay, type ToolOverlay, type ToolVersion,
   setUserPlan,
 } from "../platform/admin-api";
 import { applyRegistryOverlays, CATEGORIES, loadRegistryOverlays } from "../lib/registry";
@@ -19,7 +19,7 @@ import { Btn, ErrorCallout, Field, Panel, Select, Stat, TextInput, inputCls } fr
 import { AccountUnavailable } from "./auth";
 import { cn } from "../utils/cn";
 
-type Section = "overview" | "tools" | "categories" | "users" | "flags" | "analytics" | "audit" | "health";
+type Section = "overview" | "tools" | "categories" | "users" | "flags" | "analytics" | "audit" | "billing" | "health";
 
 const SECTIONS: { id: Section; label: string; icon: typeof Gauge; hint: string }[] = [
   { id: "overview", label: "Overview", icon: Gauge, hint: "Live counts and configuration state" },
@@ -29,6 +29,7 @@ const SECTIONS: { id: Section; label: string; icon: typeof Gauge; hint: string }
   { id: "flags", label: "Flags & history", icon: Flag, hint: "Feature toggles and tool version history (admin+)" },
   { id: "analytics", label: "Analytics", icon: Activity, hint: "Real usage, no fabricated numbers" },
   { id: "audit", label: "Audit log", icon: ShieldCheck, hint: "Administrative and account events" },
+  { id: "billing", label: "Billing ledger", icon: CreditCard, hint: "Plan-change history (billing_events)" },
   { id: "health", label: "Health", icon: AlertTriangle, hint: "Dependency and migration checks" },
 ];
 
@@ -113,6 +114,7 @@ export function AdminPage({ section, onNav }: { section: Section; onNav: (route:
               : section === "flags" ? <FlagsManager registry={registry} />
                   : section === "analytics" ? <Analytics />
                     : section === "audit" ? <AuditLog />
+                      : section === "billing" ? <BillingLedger />
                       : <Health />}
         </div>
       </div>
@@ -707,6 +709,46 @@ function AuditLog() {
               {Object.keys(row.metadata ?? {}).length > 0 && <span className="w-full font-mono text-[11px] text-zinc-500">{JSON.stringify(row.metadata)}</span>}
             </div>
           )) : <p className="p-6 text-center text-[13px] text-zinc-500">No audit events recorded yet.</p>}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+/* --------------------------- Billing ledger --------------------------- */
+
+function BillingLedger() {
+  const [rows, setRows] = useState<BillingEventRow[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const load = useCallback(() => {
+    setError("");
+    setLoading(true);
+    fetchAdminBilling(80)
+      .then(setRows)
+      .catch((c: unknown) => setError(c instanceof Error ? c.message : "Billing ledger unavailable."))
+      .finally(() => setLoading(false));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  return (
+    <Panel className="p-4">
+      <h2 className="text-[14px] font-extrabold">Billing ledger</h2>
+      <p className="mt-1 text-[12.5px] text-zinc-500">Plan-change history from the billing_events ledger (phase 18), newest first.</p>
+      {error && <div className="mt-3"><ErrorCallout title="Billing ledger unavailable" message={error} /></div>}
+      {error && <div className="mt-3"><Btn onClick={load}>Retry</Btn></div>}
+      {loading && !error && <p className="mt-3 text-[13px] text-zinc-500">Loading billing events…</p>}
+      {rows && (
+        <div className="mt-3 max-h-[60vh] overflow-auto rounded-xl border border-zinc-200 dark:border-zinc-800">
+          {rows.length ? rows.map((row) => (
+            <div key={row.id} className="flex flex-wrap items-baseline gap-2 border-b border-zinc-100 px-3 py-2 text-[12.5px] last:border-0 dark:border-zinc-800/70">
+              <code className="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[11px] font-bold dark:bg-zinc-800">{row.old_plan_id ? `${row.old_plan_id} → ${row.new_plan_id}` : `→ ${row.new_plan_id}`}</code>
+              <code className="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[11px] dark:bg-zinc-800">{row.source}</code>
+              <span className="font-mono text-[11px] text-zinc-400">{row.kind}</span>
+              <span className="font-mono text-[11px] text-zinc-400">{row.user_id.slice(0, 8)}</span>
+              <span className="ml-auto font-mono text-[11px] text-zinc-400">{new Date(row.created_at).toLocaleString()}</span>
+              {row.note && <span className="w-full font-mono text-[11px] text-zinc-500">{row.note}</span>}
+            </div>
+          )) : <p className="p-6 text-center text-[13px] text-zinc-500">No billing events recorded yet.</p>}
         </div>
       )}
     </Panel>

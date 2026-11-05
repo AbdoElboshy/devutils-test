@@ -72,6 +72,12 @@ export async function fetchAdminAnalytics(days = 30): Promise<AdminAnalytics> {
 export async function fetchAdminAudit(limit = 50): Promise<AuditEntry[]> {
   return apiFetch<AuditEntry[]>(`/api/admin/audit?limit=${limit}`);
 }
+
+/* p19: billing ledger rows for the admin console (phase 18 table). */
+export type BillingEventRow = { id: string; kind: string; old_plan_id: string | null; new_plan_id: string; source: string; note: string | null; recorded_by: string | null; created_at: string; user_id: string };
+export async function fetchAdminBilling(limit = 50): Promise<BillingEventRow[]> {
+  return apiFetch<BillingEventRow[]>(`/api/admin/billing?limit=${limit}`);
+}
 export async function fetchAdminHealth(): Promise<AdminHealth> {
   return apiFetch<AdminHealth>("/api/admin/health");
 }

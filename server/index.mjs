@@ -1542,6 +1542,18 @@ app.get("/api/admin/audit", async (req, res) => {
   res.json(r.data);
 });
 
+/* p19: admin view of the billing ledger (phase 18). Mirrors /api/admin/audit:
+   admin-session gated by the /api/admin middleware stack, newest-first, capped
+   limit. user_id shown raw (FK is to auth.users, like AuditLog does). */
+app.get("/api/admin/billing", async (req, res) => {
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit ?? 50)));
+  const r = await service.from("billing_events")
+    .select("id,kind,old_plan_id,new_plan_id,source,note,recorded_by,created_at,user_id")
+    .order("created_at", { ascending: false }).limit(limit);
+  if (r.error) return sendError(res, r.error, "Billing ledger unavailable.");
+  res.json(r.data);
+});
+
 app.get("/api/admin/health", async (_req, res) => {
   const checks = {};
   const tables = ["profiles", "favorites", "saved_workflows", "saved_presets", "usage_records", "api_keys", "audit_logs", "tool_overrides", "category_overrides", "analytics_events", "admin_users", "feature_flags", "tool_override_versions"];
