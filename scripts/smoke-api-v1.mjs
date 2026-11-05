@@ -384,6 +384,24 @@ ok("new owner removes the previous owner (offboarding) -> 200", r2.status === 20
 const { count: oldOwnerRows } = await service.from("team_members").select("user_id", { count: "exact", head: true }).eq("team_id", tId).eq("user_id", smokeUserId);
 ok("previous owner no longer in team_members", (oldOwnerRows ?? 0) === 0, `got ${oldOwnerRows}`);
 
+console.log("20) Billing ledger (p18)");
+r2 = await sreq("GET", "/api/account/billing", { origin, csrf });
+ok("billing summary requires a session -> 401", r2.status === 401, `got ${r2.status}`);
+r2 = await sreq("GET", "/api/account/billing", { jar, origin, csrf });
+ok("billing summary -> 200 with plan, limit, events", r2.status === 200 && r2.json?.planId && typeof r2.json?.monthlyLimit === "number" && Array.isArray(r2.json?.events), `got ${r2.status}`);
+r2 = await sreq("PUT", `/api/admin/users/${smokeUserId}/plan`, { jar, origin, csrf, body: { planId: "pro" } });
+ok("admin changes plan to pro -> 200", r2.status === 200, `got ${r2.status} ${r2.json?.error ?? ""}`);
+let beOk = false;
+const { data: be } = await service.from("billing_events").select("old_plan_id,new_plan_id,source").eq("user_id", smokeUserId).order("created_at", { ascending: false }).limit(1);
+if (be?.length) beOk = be[0].new_plan_id === "pro" && be[0].source === "admin";
+ok("billing_events row recorded with source admin", beOk, `got ${JSON.stringify(be ?? [])}`);
+r2 = await sreq("GET", "/api/account/billing", { jar, origin, csrf });
+ok("billing history lists the change", r2.status === 200 && (r2.json?.events ?? []).some((e) => e.new_plan_id === "pro"), `got ${r2.status}`);
+r2 = await sreq("PUT", `/api/admin/users/${smokeUserId}/plan`, { jar, origin, csrf, body: { planId: "team" } });
+ok("admin restores the plan -> 200", r2.status === 200, `got ${r2.status} ${r2.json?.error ?? ""}`);
+const { data: be2 } = await service.from("billing_events").select("old_plan_id,new_plan_id").eq("user_id", smokeUserId).order("created_at", { ascending: false }).limit(1);
+ok("second ledger row records the restore", be2?.length === 1 && be2[0].new_plan_id === "team" && be2[0].old_plan_id === "pro", `got ${JSON.stringify(be2 ?? [])}`);
+
 // Cleanup: revoke the read-only key, delete only THIS run's usage rows.
 await revokeByHash(readOnly.keyHash);
 const { error: delErr } = await service.from("usage_records").delete().in("resource_id", ["api:v1", "api:v1:workflow"]).gte("recorded_at", startTs);

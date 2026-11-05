@@ -958,6 +958,21 @@ app.post("/api/account/teams/:id/owner", async (req, res) => {
   } catch (error) { sendError(res, error, "Ownership transfer failed."); }
 });
 
+/* p18: provider-independent billing summary + plan history. */
+app.get("/api/account/billing", async (req, res) => {
+  try {
+    const planId = await planOfUser(req.devutils.user.id);
+    const limit = API_V1_PLAN_LIMITS[planId] ?? API_V1_PLAN_LIMITS.free;
+    const since = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString();
+    const usedRes = await userDb(req.devutils.access).from("usage_records").select("quantity").eq("metric", "workflow_runs").gte("recorded_at", since);
+    if (usedRes.error) return sendError(res, usedRes.error, "Billing summary unavailable.");
+    const used = (usedRes.data ?? []).reduce((sum, row) => sum + Number(row.quantity ?? 0), 0);
+    const ev = await service.from("billing_events").select("id,kind,old_plan_id,new_plan_id,source,note,created_at").eq("user_id", req.devutils.user.id).order("created_at", { ascending: false }).limit(50);
+    if (ev.error) return sendError(res, ev.error, "Billing summary unavailable.");
+    res.json({ planId, monthlyLimit: limit, workflowRunsUsed: used, events: ev.data ?? [] });
+  } catch (error) { sendError(res, error, "Billing summary unavailable."); }
+});
+
 app.get("/api/account/usage", async (req, res) => {
   const r = await userDb(req.devutils.access).rpc("get_usage_summary");
   if (r.error) return sendError(res, r.error);
@@ -1297,12 +1312,16 @@ app.put("/api/admin/users/:id/plan", requireRole("admin"), async (req, res) => {
   const planId = normalizePlanId(req.body?.planId);
   if (!planId) return res.status(400).json({ error: "planId must be one of: free, pro, team, enterprise." });
   try {
-    const r = await service.from("profiles").update({ plan_id: planId, updated_at: new Date().toISOString() }).eq("user_id", userId).select("user_id,plan_id").maybeSingle();
+    const before = await service.from("profiles").select("plan_id").eq("user_id", userId).maybeSingle();
+  if (before.error) return sendError(res, before.error, "Plan update failed.");
+const r = await service.from("profiles").update({ plan_id: planId, updated_at: new Date().toISOString() }).eq("user_id", userId).select("user_id,plan_id").maybeSingle();
     if (r.error) return sendError(res, r.error, "Plan update failed.");
     if (!r.data) return res.status(404).json({ error: "Unknown user." });
     const { error: metaError } = await service.auth.admin.updateUserById(userId, { app_metadata: { plan_id: planId } });
     if (metaError) return sendError(res, metaError, "Plan metadata update failed.");
     if (!(await recordAdminAuditOrRespond(res, req.devutils.user.id, "plan_changed", { user_id: userId, plan_id: planId }))) return;
+    const bInsert = await service.from("billing_events").insert({ user_id: userId, kind: "plan_change", old_plan_id: before.data?.plan_id ?? null, new_plan_id: planId, source: "admin", note: "Plan changed from the admin console.", recorded_by: req.devutils.user.id });
+    if (bInsert.error) console.error("[DevUtils] billing ledger write failed:", bInsert.error.message);
     res.json({ ok: true, userId, planId });
   } catch (error) { sendError(res, error, "Plan update failed."); }
 });
