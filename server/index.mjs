@@ -827,6 +827,29 @@ app.delete("/api/account/teams/:id/collections/:colId", async (req, res) => {
    explicit per-route authorization, mirroring p13/p16. No email provider is
    configured, so invites return a copyable link and also surface in the
    invitee's in-app pending list. */
+
+/* p20: best-effort invitation email via Resend. Env-gated: without RESEND_API_KEY
+   the invite behaves exactly as before (link shown in the UI, no email sent).
+   A failed send is logged, never fatal - the invite link always works. */
+async function sendInviteEmail({ to, inviteUrl, expiresAt }) {
+  const key = process.env.RESEND_API_KEY;
+  if (!key) return false;
+  try {
+    const r = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: process.env.INVITE_EMAIL_FROM || "DevUtils <onboarding@resend.dev>",
+        to: [to],
+        subject: "You're invited to join a team on DevUtils",
+        html: `<p>Someone invited you to join their team on DevUtils.</p><p><a href="${inviteUrl}">Accept the invitation</a></p><p>This link expires ${new Date(expiresAt).toUTCString()}. If you don't have an account yet, sign up first, then open the link.</p><p style="color:#666">If you weren't expecting this, you can ignore this email.</p>`,
+      }),
+    });
+    if (!r.ok) console.warn("invite email send failed:", r.status, await r.text().catch(() => ""));
+    return r.ok;
+  } catch (cause) { console.warn("invite email send failed:", cause); return false; }
+}
+
 app.post("/api/account/teams/:id/invitations", async (req, res) => {
   const teamId = String(req.params.id).slice(0, 64);
   const email = String(req.body?.email ?? "").trim().toLowerCase().slice(0, 254);
@@ -852,7 +875,9 @@ app.post("/api/account/teams/:id/invitations", async (req, res) => {
     const ins = await service.from("team_invitations").insert({ team_id: teamId, email, role, token_hash: tokenHash, invited_by: req.devutils.user.id }).select("id,expires_at");
     if (ins.error) return sendError(res, ins.error, "Invitation create failed.");
     await audit(req.devutils.user.id, "team_invitation_created", { team_id: teamId });
-    res.json({ id: ins.data[0].id, email, role, expiresAt: ins.data[0].expires_at, token, inviteUrl: `${req.protocol}://${req.get("host")}/account?invite=${token}` });
+    const inviteUrl = `${req.protocol}://${req.get("host")}/account?invite=${token}`;
+    const emailSent = await sendInviteEmail({ to: email, inviteUrl, expiresAt: ins.data[0].expires_at });
+    res.json({ id: ins.data[0].id, email, role, expiresAt: ins.data[0].expires_at, token, inviteUrl, emailSent });
   } catch (error) { sendError(res, error, "Invitation create failed."); }
 });
 
