@@ -574,9 +574,23 @@ return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Teams</
   </Panel>;
 }
 
+type BillingEventRow = { id: string; kind: string; old_plan_id: string | null; new_plan_id: string; source: string; note: string | null; created_at: string };
+
 function BillingSection({ plan, apiLimit }: { plan: string; apiLimit: number | null }) {
-  return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Plan and billing</h2><p className="mt-2 text-[13px]">Current plan: <span className="rounded bg-emerald-100 px-2 py-1 font-semibold capitalize text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">{plan}</span></p><p className="mt-3 text-[13px] text-zinc-500">Monthly API quota on this plan: <span className="font-semibold text-zinc-700 dark:text-zinc-300">{apiLimit === null ? "unlimited" : `${apiLimit.toLocaleString()} requests`}</span>.</p><p className="mt-4 rounded-xl border border-dashed border-zinc-300 p-4 text-[13px] leading-relaxed text-zinc-500 dark:border-zinc-700">No payment provider is configured, so DevUtils presents no checkout, cancellation, or pricing actions that cannot work. Plan changes are applied by an administrator and take effect immediately. The provider-independent subscription model remains ready for a Stripe, Paddle, or Lemon Squeezy integration.</p></Panel>;
-}
+  const [events, setEvents] = useState<BillingEventRow[]>([]);
+  useEffect(() => { (async () => { try { const r = await apiFetch<{ events: BillingEventRow[] }>("/api/account/billing"); setEvents(r.events ?? []); } catch { setEvents([]); } })(); }, []);
+  return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Plan and billing</h2>
+    <p className="mt-2 text-[13px]">Current plan: <span className="rounded bg-emerald-100 px-2 py-1 font-semibold capitalize text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">{plan}</span></p>
+    <p className="mt-3 text-[13px] text-zinc-500">Monthly API quota on this plan: <span className="font-semibold text-zinc-700 dark:text-zinc-300">{apiLimit === null ? "unlimited" : `${apiLimit.toLocaleString()} requests`}</span>.</p>
+    <p className="mt-4 text-[11px] font-bold uppercase tracking-wide text-zinc-400">Plan history</p>
+    {events.length === 0 ? <p className="mt-1 text-[12.5px] text-zinc-500">No plan changes recorded yet.</p> : <div className="mt-1">{events.map((e) => (
+      <div key={e.id} className="flex items-center justify-between gap-2 border-b border-zinc-100 py-1.5 last:border-0 dark:border-zinc-800">
+        <span className="text-[12.5px]"><span className="font-medium capitalize">{e.old_plan_id ?? "—"} → {e.new_plan_id}</span> <span className="text-zinc-500">· {e.source}</span></span>
+        <span className="text-[11.5px] text-zinc-400">{new Date(e.created_at).toLocaleString()}</span>
+      </div>
+    ))}</div>}
+    <p className="mt-4 rounded-xl border border-dashed border-zinc-300 p-4 text-[13px] leading-relaxed text-zinc-500 dark:border-zinc-700">No payment provider is configured, so DevUtils presents no checkout, cancellation, or pricing actions that cannot work. Plan changes are applied by an administrator, recorded in the ledger above, and take effect immediately. The ledger is provider-independent and ready to feed a Stripe, Paddle, or Lemon Squeezy integration.</p>
+  </Panel>;}
 
 function SettingsSection({ profile, onNav }: { profile: Profile | null; onNav: (route: string) => void }) {
   const auth = useAuth();
