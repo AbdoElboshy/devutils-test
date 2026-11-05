@@ -348,6 +348,8 @@ type TeamWorkflowRow = { id: string; name: string; description: string; steps: A
 type TeamMemberRow = { userId: string; role: "owner" | "admin" | "member"; displayName: string | null };
 type TeamCollectionRow = { id: string; name: string; description: string; updated_at: string };
 type TeamCollectionItemRow = { collection_id: string; kind: string; target_id: string; sort_order: number };
+type TeamInvitationRow = { id: string; email: string; role: string; expires_at: string; revoked_at: string | null; accepted_at: string | null };
+type MyInvitationRow = { id: string; teamId: string; teamName: string; role: string; expiresAt: string };
 
 /* p14: per-card run box for shared team workflows. Self-contained state so
    the team panel stays simple; runs hit POST .../run (member-attributed quota). */
@@ -392,6 +394,11 @@ function TeamsSection({ user }: { user: User }) {
   const [itemKinds, setItemKinds] = useState<Record<string, string>>({});
   const [itemTargets, setItemTargets] = useState<Record<string, string>>({});
   const [colName, setColName] = useState("");
+  const [teamInvites, setTeamInvites] = useState<Record<string, TeamInvitationRow[]>>({});
+  const [myInvites, setMyInvites] = useState<MyInvitationRow[]>([]);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState("member");
+  const [transferId, setTransferId] = useState("");
   const [shareId, setShareId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -427,6 +434,13 @@ const load = useCallback(async () => {
       }));
       setTeamCols(Object.fromEntries(colList));
       setTeamColItems(Object.fromEntries(colItems));
+      const invList: [string, TeamInvitationRow[]][] = [];
+      await Promise.all(list.map(async (team) => {
+        try { invList.push([team.id, (await apiFetch<{ invitations: TeamInvitationRow[] }>(`/api/account/teams/${team.id}/invitations`)).invitations ?? []]); }
+        catch { /* not a manager of this team */ }
+      }));
+      setTeamInvites(Object.fromEntries(invList));
+      try { const mineInv = await apiFetch<{ invitations: MyInvitationRow[] }>("/api/account/invitations"); setMyInvites(mineInv.invitations ?? []); } catch { setMyInvites([]); }
       try { const mine = await apiFetch<SavedWorkflow[]>("/api/account/workflows"); setMyWorkflows(Array.isArray(mine) ? mine : []); }
       catch { setMyWorkflows([]); }
     }
@@ -451,13 +465,16 @@ return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Teams</
       <input className="w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-1.5 text-[13px] outline-none focus:border-emerald-500 dark:border-zinc-700" placeholder="New team name" value={name} onChange={(event) => setName(event.target.value)} />
       <Btn variant="primary" disabled={busy || !name.trim()} onClick={() => { const chosen = name.trim(); void act(async () => { await apiFetch("/api/account/teams", { method: "POST", body: JSON.stringify({ name: chosen }) }); setName(""); }); }}>Create</Btn>
     </div>
-    <div className="mt-5">
+      {myInvites.length ? <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-900 dark:bg-emerald-950"><p className="text-[11px] font-bold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Your team invitations</p>{myInvites.map((inv) => (<div key={inv.id} className="mt-1 flex items-center justify-between gap-2"><span className="text-[12.5px]"><span className="font-semibold">{inv.teamName}</span> <span className="text-zinc-500">invites you as {inv.role}</span></span><Btn variant="primary" disabled={busy} onClick={() => { if (busy) return; void act(async () => { await apiFetch(`/api/account/invitations/${encodeURIComponent(inv.id)}/accept`, { method: "POST" }); }); }}>Accept</Btn></div>))}</div> : null}
+      <div className="mt-5">
       {teams.length === 0 ? <p className="text-[13px] text-zinc-500">No teams yet. Create one above.</p> : teams.map((team) => (
         <div key={team.id} className="border-b border-zinc-100 py-3 last:border-0 dark:border-zinc-800">
           <div className="flex items-center justify-between gap-2">
             <span className="text-[13.5px] font-semibold">{team.name}</span>
             <span className="rounded bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold capitalize text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{team.role}</span>
           </div>
+    
+    
           <p className="mt-0.5 text-[11.5px] text-zinc-400">{team.memberCount} member{team.memberCount === 1 ? "" : "s"}</p>
           {(teamMembers[team.id] ?? []).length === 0 ? null : <div className="mt-2">
             {(teamMembers[team.id] ?? []).map((m) => (
@@ -472,11 +489,33 @@ return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Teams</
             <Btn disabled={busy || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(memberEmail.trim())} onClick={() => { const email = memberEmail.trim(); void act(async () => { await apiFetch(`/api/account/teams/${team.id}/members`, { method: "POST", body: JSON.stringify({ email }) }); }); setMemberEmail(""); }}>Add</Btn>
           </div> : null}
           <div className="mt-2 flex gap-2">
-            <Btn disabled={busy} onClick={() => void act(async () => { await apiFetch(`/api/account/teams/${team.id}/members/${user.id}`, { method: "DELETE" }); })}>Leave</Btn>
+            <Btn disabled={busy} onClick={() => void act(async () => { await apiFetch(`/api/account/teams/${team.id}/members/${user.id}`, { method: "DELETE" }); })}>Leave</Btn>{team.role === "owner" ? <span className="flex gap-1">
+                <select className="rounded-lg border border-zinc-300 bg-transparent px-2 py-1 text-[12px] outline-none focus:border-emerald-500 dark:border-zinc-700" value={transferId} onChange={(event) => setTransferId(event.target.value)}>
+                  <option value="">Transfer ownership to…</option>
+                  {(teamMembers[team.id] ?? []).filter((m) => m.userId !== user.id).map((m) => <option key={m.userId} value={m.userId}>{m.displayName ?? "Unnamed member"}</option>)}
+                </select>
+                <Btn disabled={busy || !transferId.trim()} onClick={() => { if (busy) return; const target = transferId.trim(); if (confirm("Transfer ownership? You become an admin and cannot undo this yourself.")) void act(async () => { await apiFetch(`/api/account/teams/${team.id}/owner`, { method: "POST", body: JSON.stringify({ userId: target }) }); setTransferId(""); }); }}>Transfer</Btn>
+              </span> : null}
             {team.role === "owner" ? <Btn disabled={busy} onClick={() => void act(async () => { await apiFetch(`/api/account/teams/${team.id}`, { method: "DELETE" }); })}><Trash2 size={13} /> Delete team</Btn> : null}
           </div>
           <div className="mt-3 border-t border-zinc-100 pt-2 dark:border-zinc-800">
-            <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-400">Shared workflows</p>
+            <div className="mt-3 border-t border-zinc-100 pt-2 dark:border-zinc-800">
+              <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-400">Invitations</p>
+              {team.role !== "member" ? <div className="mt-1 flex gap-1">
+                <input type="email" className="w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-1 text-[12px] outline-none focus:border-emerald-500 dark:border-zinc-700" placeholder="invitee@example.com (link is copied, no email is sent)" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} />
+                <select className="rounded-lg border border-zinc-300 bg-transparent px-2 py-1 text-[12px] outline-none focus:border-emerald-500 dark:border-zinc-700" value={inviteRole} onChange={(event) => setInviteRole(event.target.value)}>
+                  <option value="member">member</option><option value="admin">admin</option>
+                </select>
+                <Btn disabled={busy || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(inviteEmail.trim())} onClick={() => { if (busy) return; const email = inviteEmail.trim(); void act(async () => { const r = await apiFetch<{ inviteUrl: string }>(`/api/account/teams/${team.id}/invitations`, { method: "POST", body: JSON.stringify({ email, role: inviteRole }) }); try { if (r.inviteUrl && navigator.clipboard) await navigator.clipboard.writeText(r.inviteUrl); else if (r.inviteUrl) prompt("Share this invite link:", r.inviteUrl); } catch { prompt("Share this invite link:", r.inviteUrl); } }); setInviteEmail(""); }}>Invite</Btn>
+              </div> : null}
+              {(teamInvites[team.id] ?? []).filter((iv) => !iv.revoked_at && !iv.accepted_at).length === 0 ? <p className="mt-1 text-[12px] text-zinc-500">No pending invitations.</p> : (teamInvites[team.id] ?? []).filter((iv) => !iv.revoked_at && !iv.accepted_at).map((iv) => (
+                <div key={iv.id} className="mt-1 flex items-center justify-between gap-2">
+                  <span className="text-[12px] text-zinc-500"><span className="font-medium">{iv.email}</span> · {iv.role}</span>
+                  {team.role !== "member" ? <Btn disabled={busy} onClick={() => { if (busy) return; if (confirm(`Revoke the invitation for ${iv.email}?`)) void act(async () => { await apiFetch(`/api/account/teams/${team.id}/invitations/${iv.id}`, { method: "DELETE" }); }); }}>Revoke</Btn> : null}
+                </div>
+              ))}
+            </div>
+          <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-400">Shared workflows</p>
             {(teamWfs[team.id] ?? []).length === 0 ? <p className="mt-1 text-[12px] text-zinc-500">None yet.</p> : (teamWfs[team.id] ?? []).map((wf) => (
                             <div key={wf.id}>
 <TeamWorkflowRunBox teamId={team.id} wfId={wf.id} />
