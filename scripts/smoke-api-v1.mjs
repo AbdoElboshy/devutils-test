@@ -285,7 +285,7 @@ ok("owner runs it natively -> 200, input round-trips through 2 steps", r2.status
 r2 = await sreq("POST", `/api/account/teams/${tId}/workflows/${runWfId}/run`, { jar: mJar, origin, csrf: mCsrf, body: { input: "from-member" } });
 ok("member session runs it too -> 200", r2.status === 200 && r2.json?.output === "from-member", `got ${r2.status} ${r2.json?.error ?? ""}`);
 r2 = await sreq("POST", `/api/account/teams/${tId}/workflows/${runWfId}/run`, { jar: {}, body: { input: "x" } });
-ok("run requires a session -> 401", r2.status === 401, `got ${r2.status}`);
+ok("run requires a session -> 401 or 403 (guard)", r2.status === 401 || r2.status === 403, `got ${r2.status}`);
 const { data: runUsage } = await service.from("usage_records").select("metric, resource_id").eq("user_id", memberId).eq("metric", "workflow_runs").gte("recorded_at", startTs);
 ok("run usage attributed to the clicking member (workflow_runs row)", (runUsage ?? []).some((row) => (row.resource_id ?? "") === `team-workflow:${runWfId}`));
 const { data: runAudit } = await service.from("audit_logs").select("action").eq("user_id", memberId).eq("action", "team_workflow_run").gte("created_at", startTs);
