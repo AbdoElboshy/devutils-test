@@ -346,6 +346,8 @@ function UsageSection({ usage, user }: { usage: UsageSummary; user: User }) {
 type TeamRow = { id: string; name: string; created_at: string; role: "owner" | "admin" | "member"; memberCount: number };
 type TeamWorkflowRow = { id: string; name: string; description: string; steps: Array<{ id: string; operationId: string; label?: string }>; updated_at: string };
 type TeamMemberRow = { userId: string; role: "owner" | "admin" | "member"; displayName: string | null };
+type TeamCollectionRow = { id: string; name: string; description: string; updated_at: string };
+type TeamCollectionItemRow = { collection_id: string; kind: string; target_id: string; sort_order: number };
 
 /* p14: per-card run box for shared team workflows. Self-contained state so
    the team panel stays simple; runs hit POST .../run (member-attributed quota). */
@@ -385,6 +387,11 @@ function TeamsSection({ user }: { user: User }) {
   const [teamWfs, setTeamWfs] = useState<Record<string, TeamWorkflowRow[]>>({});
   const [teamMembers, setTeamMembers] = useState<Record<string, TeamMemberRow[]>>({});
   const [myWorkflows, setMyWorkflows] = useState<SavedWorkflow[]>([]);
+  const [teamCols, setTeamCols] = useState<Record<string, TeamCollectionRow[]>>({});
+  const [teamColItems, setTeamColItems] = useState<Record<string, TeamCollectionItemRow[]>>({});
+  const [itemKinds, setItemKinds] = useState<Record<string, string>>({});
+  const [itemTargets, setItemTargets] = useState<Record<string, string>>({});
+  const [colName, setColName] = useState("");
   const [shareId, setShareId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -406,6 +413,20 @@ const load = useCallback(async () => {
         catch { return [team.id, []] as const; }
       }));
       setTeamMembers(Object.fromEntries(memberEntries));
+      const colList: [string, TeamCollectionRow[]][] = [];
+      const colItems: [string, TeamCollectionItemRow[]][] = [];
+      await Promise.all(list.map(async (team) => {
+        try {
+          const colData = await apiFetch<{ collections: TeamCollectionRow[] }>(`/api/account/teams/${team.id}/collections`);
+          colList.push([team.id, colData.collections ?? []]);
+          await Promise.all((colData.collections ?? []).map(async (col) => {
+            try { colItems.push([`${team.id}/${col.id}`, (await apiFetch<{ items: TeamCollectionItemRow[] }>(`/api/account/teams/${team.id}/collections/${col.id}/items`)).items ?? []]); }
+            catch { colItems.push([`${team.id}/${col.id}`, []]); }
+          }));
+        } catch { /* collections unavailable for this team */ }
+      }));
+      setTeamCols(Object.fromEntries(colList));
+      setTeamColItems(Object.fromEntries(colItems));
       try { const mine = await apiFetch<SavedWorkflow[]>("/api/account/workflows"); setMyWorkflows(Array.isArray(mine) ? mine : []); }
       catch { setMyWorkflows([]); }
     }
@@ -474,6 +495,38 @@ return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Teams</
                 {myWorkflows.map((wf) => <option key={wf.id} value={wf.id}>{wf.name}</option>)}
               </select>
               <Btn disabled={busy || !shareId.trim()} onClick={() => { if (busy) return; const id = shareId.trim(); const wf = myWorkflows.find((row) => row.id === id); if (!wf) { setError("Pick one of your workflows first."); return; } void act(async () => { await apiFetch(`/api/account/teams/${team.id}/workflows/${id}`, { method: "PUT", body: JSON.stringify({ name: wf.name, description: wf.description, steps: wf.steps }) }); }); setShareId(""); }}>Share</Btn>
+            </div> : null}
+          </div>
+          <div className="mt-3 border-t border-zinc-100 pt-2 dark:border-zinc-800">
+            <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-400">Shared collections</p>
+            {(teamCols[team.id] ?? []).length === 0 ? <p className="mt-1 text-[12px] text-zinc-500">None yet.</p> : (teamCols[team.id] ?? []).map((col) => {
+              const k2 = `${team.id}/${col.id}`;
+              return <div key={col.id} className="mt-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[12.5px] font-medium">{col.name}{col.description ? <span className="text-zinc-400"> — {col.description}</span> : null}</span>
+                  <span className="flex gap-1">
+                    <Btn disabled={busy} onClick={() => { if (busy) return; void act(async () => { await apiFetch(`/api/account/teams/${team.id}/collections/${col.id}/copy`, { method: "POST" }); }); }}>Copy to mine</Btn>
+                    {team.role !== "member" ? <Btn variant="danger" className="py-1" disabled={busy} onClick={() => { if (busy) return; if (confirm(`Delete shared collection "${col.name}"?`)) void act(async () => { await apiFetch(`/api/account/teams/${team.id}/collections/${col.id}`, { method: "DELETE" }); }); }}><Trash2 size={13} /></Btn> : null}
+                  </span>
+                </div>
+                {(teamColItems[k2] ?? []).length === 0 ? <p className="mt-1 text-[12px] text-zinc-500">No items.</p> : (teamColItems[k2] ?? []).map((it) => (
+                  <div key={it.target_id} className="mt-1 flex items-center justify-between gap-2">
+                    <span className="text-[12px] text-zinc-500"><span className="font-semibold capitalize">{it.kind}</span> · {it.target_id}</span>
+                    {team.role !== "member" ? <Btn disabled={busy} onClick={() => { void act(async () => { await apiFetch(`/api/account/teams/${team.id}/collections/${col.id}/items/${encodeURIComponent(it.target_id)}`, { method: "DELETE" }); }); }}>Remove</Btn> : null}
+                  </div>
+                ))}
+                {team.role !== "member" ? <div className="mt-1 flex gap-1">
+                  <select className="rounded-lg border border-zinc-300 bg-transparent px-2 py-1 text-[12px] outline-none focus:border-emerald-500 dark:border-zinc-700" value={itemKinds[k2] ?? "tool"} onChange={(event) => setItemKinds({ ...itemKinds, [k2]: event.target.value })}>
+                    <option value="tool">tool</option><option value="toolkit">toolkit</option><option value="workflow">workflow</option><option value="integration">integration</option>
+                  </select>
+                  <input className="w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-1 text-[12px] outline-none focus:border-emerald-500 dark:border-zinc-700" placeholder="target id, e.g. base64.encode" value={itemTargets[k2] ?? ""} onChange={(event) => setItemTargets({ ...itemTargets, [k2]: event.target.value })} />
+                  <Btn disabled={busy || !(itemTargets[k2] ?? "").trim()} onClick={() => { if (busy) return; const target = (itemTargets[k2] ?? "").trim(); const kind = itemKinds[k2] ?? "tool"; void act(async () => { await apiFetch(`/api/account/teams/${team.id}/collections/${col.id}/items`, { method: "POST", body: JSON.stringify({ kind, targetId: target }) }); }); setItemTargets({ ...itemTargets, [k2]: "" }); }}>Add</Btn>
+                </div> : null}
+              </div>;
+            })}
+            {team.role !== "member" ? <div className="mt-2 flex gap-2">
+              <input className="w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-1.5 text-[13px] outline-none focus:border-emerald-500 dark:border-zinc-700" placeholder="New shared collection name" value={colName} onChange={(event) => setColName(event.target.value)} />
+              <Btn variant="primary" disabled={busy || !colName.trim()} onClick={() => { if (busy) return; const chosen = colName.trim(); const id = crypto.randomUUID(); void act(async () => { await apiFetch(`/api/account/teams/${team.id}/collections/${id}`, { method: "PUT", body: JSON.stringify({ name: chosen, description: "" }) }); }); setColName(""); }}>Create</Btn>
             </div> : null}
           </div>
         </div>
