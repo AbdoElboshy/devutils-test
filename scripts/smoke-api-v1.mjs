@@ -385,7 +385,7 @@ const { count: oldOwnerRows } = await service.from("team_members").select("user_
 ok("previous owner no longer in team_members", (oldOwnerRows ?? 0) === 0, `got ${oldOwnerRows}`);
 
 console.log("20) Billing ledger (p18)");
-r2 = await sreq("GET", "/api/account/billing");
+r2 = await sreq("GET", "/api/account/billing", { jar: {} });
 ok("billing summary requires a session -> 401", r2.status === 401, `got ${r2.status}`);
 r2 = await sreq("GET", "/api/account/billing", { jar, origin, csrf });
 ok("billing summary -> 200 with plan, limit, events", r2.status === 200 && r2.json?.planId && typeof r2.json?.monthlyLimit === "number" && Array.isArray(r2.json?.events), `got ${r2.status}`);
