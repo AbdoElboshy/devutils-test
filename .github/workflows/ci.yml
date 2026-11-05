@@ -17,5 +17,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx tsc --noEmit
+      - run: npx tsx scripts/verify.ts
       - run: npm run test:server
       - run: npm run build
