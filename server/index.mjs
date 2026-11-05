@@ -844,6 +844,9 @@ app.post("/api/account/teams/:id/invitations", async (req, res) => {
       .eq("team_id", teamId).is("revoked_at", null).is("accepted_at", null).gt("expires_at", new Date().toISOString());
     if (active.error) throw active.error;
     if (!withinMemberLimit(planId, (members.count ?? 0) + (active.count ?? 0))) return res.status(429).json({ error: "This plan's team member limit has been reached." });
+    const dupe = await service.from("team_invitations").select("id").eq("team_id", teamId).eq("email", email).is("revoked_at", null).is("accepted_at", null).gt("expires_at", new Date().toISOString()).maybeSingle();
+    if (dupe.error) return sendError(res, dupe.error, "Invitation create failed.");
+    if (dupe.data) return res.status(409).json({ error: "An invitation for this email is already pending for this team." });
     const token = randomBytes(32).toString("base64url");
     const tokenHash = createHash("sha256").update(token).digest("hex");
     const ins = await service.from("team_invitations").insert({ team_id: teamId, email, role, token_hash: tokenHash, invited_by: req.devutils.user.id }).select("id,expires_at");

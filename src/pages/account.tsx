@@ -499,22 +499,22 @@ return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Teams</
             {team.role === "owner" ? <Btn disabled={busy} onClick={() => void act(async () => { await apiFetch(`/api/account/teams/${team.id}`, { method: "DELETE" }); })}><Trash2 size={13} /> Delete team</Btn> : null}
           </div>
           <div className="mt-3 border-t border-zinc-100 pt-2 dark:border-zinc-800">
-            <div className="mt-3 border-t border-zinc-100 pt-2 dark:border-zinc-800">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-400">Invitations</p>
-              {team.role !== "member" ? <div className="mt-1 flex gap-1">
+            {team.role !== "member" ? <>
+              <p className="mt-3 text-[11px] font-bold uppercase tracking-wide text-zinc-400">Invitations</p>
+              <div className="mt-1 flex gap-1">
                 <input type="email" className="w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-1 text-[12px] outline-none focus:border-emerald-500 dark:border-zinc-700" placeholder="invitee@example.com (link is copied, no email is sent)" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} />
                 <select className="rounded-lg border border-zinc-300 bg-transparent px-2 py-1 text-[12px] outline-none focus:border-emerald-500 dark:border-zinc-700" value={inviteRole} onChange={(event) => setInviteRole(event.target.value)}>
                   <option value="member">member</option><option value="admin">admin</option>
                 </select>
                 <Btn disabled={busy || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(inviteEmail.trim())} onClick={() => { if (busy) return; const email = inviteEmail.trim(); void act(async () => { const r = await apiFetch<{ inviteUrl: string }>(`/api/account/teams/${team.id}/invitations`, { method: "POST", body: JSON.stringify({ email, role: inviteRole }) }); try { if (r.inviteUrl && navigator.clipboard) await navigator.clipboard.writeText(r.inviteUrl); else if (r.inviteUrl) prompt("Share this invite link:", r.inviteUrl); } catch { prompt("Share this invite link:", r.inviteUrl); } }); setInviteEmail(""); }}>Invite</Btn>
-              </div> : null}
+              </div>
               {(teamInvites[team.id] ?? []).filter((iv) => !iv.revoked_at && !iv.accepted_at).length === 0 ? <p className="mt-1 text-[12px] text-zinc-500">No pending invitations.</p> : (teamInvites[team.id] ?? []).filter((iv) => !iv.revoked_at && !iv.accepted_at).map((iv) => (
                 <div key={iv.id} className="mt-1 flex items-center justify-between gap-2">
                   <span className="text-[12px] text-zinc-500"><span className="font-medium">{iv.email}</span> · {iv.role}</span>
                   {team.role !== "member" ? <Btn disabled={busy} onClick={() => { if (busy) return; if (confirm(`Revoke the invitation for ${iv.email}?`)) void act(async () => { await apiFetch(`/api/account/teams/${team.id}/invitations/${iv.id}`, { method: "DELETE" }); }); }}>Revoke</Btn> : null}
                 </div>
               ))}
-            </div>
+            </> : null}
           <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-400">Shared workflows</p>
             {(teamWfs[team.id] ?? []).length === 0 ? <p className="mt-1 text-[12px] text-zinc-500">None yet.</p> : (teamWfs[team.id] ?? []).map((wf) => (
                             <div key={wf.id}>
