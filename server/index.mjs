@@ -684,6 +684,144 @@ app.delete("/api/account/teams/:id/workflows/:wfId", async (req, res) => {
   } catch (error) { sendError(res, error, "Team workflow deletion failed."); }
 });
 
+/* p16: team-scoped shared collections. Service-role access (RLS-locked with no
+   policies); authorization enforced explicitly per route, mirroring team
+   workflows. Any member can read and copy to personal; owners and admins
+   manage collections and their items. */
+app.get("/api/account/teams/:id/collections", async (req, res) => {
+  const teamId = String(req.params.id).slice(0, 64);
+  try {
+    const me = await service.from("team_members").select("role").eq("team_id", teamId).eq("user_id", req.devutils.user.id).maybeSingle();
+    if (me.error) return sendError(res, me.error, "Team collection lookup unavailable.");
+    if (!me.data) return res.status(404).json({ error: "Unknown team." });
+    const r = await service.from("team_collections").select("id,name,description,created_at,updated_at").eq("team_id", teamId).order("updated_at", { ascending: false });
+    if (r.error) return sendError(res, r.error, "Team collection lookup unavailable.");
+    res.json({ collections: r.data ?? [] });
+  } catch (error) { sendError(res, error, "Team collection lookup unavailable."); }
+});
+
+app.get("/api/account/teams/:id/collections/:colId/items", async (req, res) => {
+  const teamId = String(req.params.id).slice(0, 64);
+  const colId = String(req.params.colId).slice(0, 200);
+  try {
+    const me = await service.from("team_members").select("role").eq("team_id", teamId).eq("user_id", req.devutils.user.id).maybeSingle();
+    if (me.error) return sendError(res, me.error, "Team collection item lookup unavailable.");
+    if (!me.data) return res.status(404).json({ error: "Unknown team." });
+    const r = await service.from("team_collection_items").select("collection_id,kind,target_id,sort_order").eq("team_id", teamId).eq("collection_id", colId).order("sort_order");
+    if (r.error) return sendError(res, r.error, "Team collection item lookup unavailable.");
+    res.json({ items: r.data ?? [] });
+  } catch (error) { sendError(res, error, "Team collection item lookup unavailable."); }
+});
+
+app.put("/api/account/teams/:id/collections/:colId", async (req, res) => {
+  const teamId = String(req.params.id).slice(0, 64);
+  const colId = String(req.params.colId).slice(0, 200);
+  const body = req.body ?? {};
+  const name = String(body.name ?? "").trim().slice(0, 60);
+  const description = String(body.description ?? "").slice(0, 200);
+  if (!name) return res.status(400).json({ error: "Collection name must be 1-60 characters." });
+  try {
+    const me = await service.from("team_members").select("role").eq("team_id", teamId).eq("user_id", req.devutils.user.id).maybeSingle();
+    if (me.error) return sendError(res, me.error, "Team collection save failed.");
+    if (!me.data) return res.status(404).json({ error: "Unknown team." });
+    if (!canManageTeamWorkflows(me.data.role)) return res.status(403).json({ error: "Only team owners and admins can manage shared collections." });
+    const dup = await service.from("team_collections").select("id").eq("team_id", teamId).eq("name", name).neq("id", colId).maybeSingle();
+    if (dup.error) return sendError(res, dup.error, "Team collection save failed.");
+    if (dup.data) return res.status(409).json({ error: "A shared collection with that name already exists." });
+    const r = await service.from("team_collections").upsert({ team_id: teamId, id: colId, name, description, updated_by: req.devutils.user.id, updated_at: new Date().toISOString() }, { onConflict: "team_id,id" }).select("id,name");
+    if (r.error) return sendError(res, r.error, "Team collection save failed.");
+    await audit(req.devutils.user.id, "team_collection_saved", { resource: "team_collection", team_id: teamId, id: colId });
+    res.json(r.data?.[0] ?? { ok: true });
+  } catch (error) { sendError(res, error, "Team collection save failed."); }
+});
+
+app.post("/api/account/teams/:id/collections/:colId/items", async (req, res) => {
+  const teamId = String(req.params.id).slice(0, 64);
+  const colId = String(req.params.colId).slice(0, 200);
+  const body = req.body ?? {};
+  const kind = String(body.kind ?? "");
+  const targetId = String(body.targetId ?? "").trim().slice(0, 200);
+  if (!["tool", "toolkit", "workflow", "integration"].includes(kind)) return res.status(400).json({ error: "Unsupported item kind." });
+  if (!targetId) return res.status(400).json({ error: "Item target is required." });
+  try {
+    const me = await service.from("team_members").select("role").eq("team_id", teamId).eq("user_id", req.devutils.user.id).maybeSingle();
+    if (me.error) return sendError(res, me.error, "Team collection item save failed.");
+    if (!me.data) return res.status(404).json({ error: "Unknown team." });
+    if (!canManageTeamWorkflows(me.data.role)) return res.status(403).json({ error: "Only team owners and admins can manage shared collections." });
+    const col = await service.from("team_collections").select("id").eq("team_id", teamId).eq("id", colId).maybeSingle();
+    if (col.error) return sendError(res, col.error, "Team collection item save failed.");
+    if (!col.data) return res.status(404).json({ error: "Unknown collection." });
+    const r = await service.from("team_collection_items").upsert({ collection_id: colId, team_id: teamId, kind, target_id: targetId, sort_order: Number(body.sortOrder ?? 0) || 0 }, { onConflict: "collection_id,target_id" });
+    if (r.error) return sendError(res, r.error, "Team collection item save failed.");
+    await service.from("team_collections").update({ updated_at: new Date().toISOString() }).eq("team_id", teamId).eq("id", colId);
+    res.json({ ok: true });
+  } catch (error) { sendError(res, error, "Team collection item save failed."); }
+});
+
+app.delete("/api/account/teams/:id/collections/:colId/items/:targetId", async (req, res) => {
+  const teamId = String(req.params.id).slice(0, 64);
+  const colId = String(req.params.colId).slice(0, 200);
+  const targetId = String(req.params.targetId).slice(0, 200);
+  try {
+    const me = await service.from("team_members").select("role").eq("team_id", teamId).eq("user_id", req.devutils.user.id).maybeSingle();
+    if (me.error) return sendError(res, me.error, "Team collection item deletion failed.");
+    if (!me.data) return res.status(404).json({ error: "Unknown team." });
+    if (!canManageTeamWorkflows(me.data.role)) return res.status(403).json({ error: "Only team owners and admins can manage shared collections." });
+    const r = await service.from("team_collection_items").delete().eq("team_id", teamId).eq("collection_id", colId).eq("target_id", targetId);
+    if (r.error) return sendError(res, r.error, "Team collection item deletion failed.");
+    res.json({ ok: true });
+  } catch (error) { sendError(res, error, "Team collection item deletion failed."); }
+});
+
+app.post("/api/account/teams/:id/collections/:colId/copy", async (req, res) => {
+  const teamId = String(req.params.id).slice(0, 64);
+  const colId = String(req.params.colId).slice(0, 200);
+  try {
+    const me = await service.from("team_members").select("role").eq("team_id", teamId).eq("user_id", req.devutils.user.id).maybeSingle();
+    if (me.error) return sendError(res, me.error, "Team collection copy failed.");
+    if (!me.data) return res.status(404).json({ error: "Unknown team." });
+    const col = await service.from("team_collections").select("id,name,description").eq("team_id", teamId).eq("id", colId).maybeSingle();
+    if (col.error) return sendError(res, col.error, "Team collection copy failed.");
+    if (!col.data) return res.status(404).json({ error: "Unknown collection." });
+    const items = await service.from("team_collection_items").select("kind,target_id,sort_order").eq("team_id", teamId).eq("collection_id", colId).order("sort_order");
+    if (items.error) return sendError(res, items.error, "Team collection copy failed.");
+    const db = userDb(req.devutils.access);
+    const copyName = `${col.data.name} (team copy)`.slice(0, 60);
+    const existing = await db.from("collections").select("id").eq("name", copyName).maybeSingle();
+    if (existing.error) return sendError(res, existing.error, "Team collection copy failed.");
+    let collectionId;
+    if (existing.data) collectionId = existing.data.id;
+    else {
+      const created = await db.from("collections").insert({ name: copyName, description: String(col.data.description ?? "").slice(0, 200) }).select("id");
+      if (created.error) return sendError(res, created.error, "Team collection copy failed.");
+      collectionId = created.data[0].id;
+    }
+    const clear = await db.from("collection_items").delete().eq("collection_id", collectionId);
+    if (clear.error) return sendError(res, clear.error, "Team collection copy failed.");
+    const rows = (items.data ?? []).map((row) => ({ collection_id: collectionId, user_id: req.devutils.user.id, kind: row.kind, target_id: row.target_id, sort_order: row.sort_order ?? 0 }));
+    if (rows.length) {
+      const ins = await db.from("collection_items").insert(rows);
+      if (ins.error) return sendError(res, ins.error, "Team collection copy failed.");
+    }
+    res.json({ ok: true, collectionId, name: copyName });
+  } catch (error) { sendError(res, error, "Team collection copy failed."); }
+});
+
+app.delete("/api/account/teams/:id/collections/:colId", async (req, res) => {
+  const teamId = String(req.params.id).slice(0, 64);
+  const colId = String(req.params.colId).slice(0, 200);
+  try {
+    const me = await service.from("team_members").select("role").eq("team_id", teamId).eq("user_id", req.devutils.user.id).maybeSingle();
+    if (me.error) return sendError(res, me.error, "Team collection deletion failed.");
+    if (!me.data) return res.status(404).json({ error: "Unknown team." });
+    if (!canManageTeamWorkflows(me.data.role)) return res.status(403).json({ error: "Only team owners and admins can manage shared collections." });
+    const r = await service.from("team_collections").delete().eq("team_id", teamId).eq("id", colId);
+    if (r.error) return sendError(res, r.error, "Team collection deletion failed.");
+    await audit(req.devutils.user.id, "team_collection_deleted", { resource: "team_collection", team_id: teamId, id: colId });
+    res.json({ ok: true });
+  } catch (error) { sendError(res, error, "Team collection deletion failed."); }
+});
+
 app.get("/api/account/usage", async (req, res) => {
   const r = await userDb(req.devutils.access).rpc("get_usage_summary");
   if (r.error) return sendError(res, r.error);
