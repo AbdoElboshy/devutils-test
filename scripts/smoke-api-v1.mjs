@@ -293,12 +293,49 @@ ok("team_workflow_run audit row recorded for the member", (runAudit ?? []).lengt
 r2 = await sreq("DELETE", `/api/account/teams/${tId}/workflows/${runWfId}`, { jar, origin, csrf });
 ok("owner removes the runnable shared workflow -> 200", r2.status === 200, `got ${r2.status}`);
 
+console.log("18) Team collections (p16: shared collections, permissions, copy)");
+const colId = `smoke-team-col-${stamp}`;
+r2 = await sreq("PUT", `/api/account/teams/${tId}/collections/${colId}`, { jar, origin, csrf, body: { name: "Team smoke collection", description: "shared tools" } });
+ok("owner creates a shared collection -> 200", r2.status === 200, `got ${r2.status} ${r2.json?.error ?? ""}`);
+const { data: colRow } = await service.from("team_collections").select("team_id,name").eq("team_id", tId).eq("id", colId).maybeSingle();
+ok("collection row exists and is team-scoped", colRow?.name === "Team smoke collection", `got ${JSON.stringify(colRow)}`);
+r2 = await sreq("POST", `/api/account/teams/${tId}/collections/${colId}/items`, { jar, origin, csrf, body: { kind: "tool", targetId: "base64.encode" } });
+ok("owner adds an item -> 200", r2.status === 200, `got ${r2.status} ${r2.json?.error ?? ""}`);
+r2 = await sreq("GET", `/api/account/teams/${tId}/collections/${colId}/items`, { jar, origin, csrf });
+ok("item listed for the owner", (r2.json?.items ?? []).some((it) => it.kind === "tool" && it.target_id === "base64.encode"), `got ${r2.status}`);
+r2 = await sreq("GET", `/api/account/teams/${tId}/collections`, { jar: mJar, origin, csrf: mCsrf });
+ok("member reads team collections -> 200", r2.status === 200 && (r2.json?.collections ?? []).some((c) => c.id === colId), `got ${r2.status} ${r2.json?.error ?? ""}`);
+r2 = await sreq("PUT", `/api/account/teams/${tId}/collections/${colId}`, { jar: mJar, origin, csrf: mCsrf, body: { name: "member takeover" } });
+ok("member cannot manage shared collections -> 403", r2.status === 403, `got ${r2.status}`);
+r2 = await sreq("POST", `/api/account/teams/${tId}/collections/${colId}/copy`, { jar: mJar, origin, csrf: mCsrf });
+ok("member copies the collection to personal -> 200", r2.status === 200 && r2.json?.ok === true, `got ${r2.status} ${r2.json?.error ?? ""}`);
+r2 = await sreq("GET", "/api/account/collections", { jar: mJar, origin, csrf: mCsrf });
+const memberCol = Array.isArray(r2.json) ? r2.json.find((c) => c.name === "Team smoke collection (team copy)") : null;
+ok("member's personal copy is listed", Boolean(memberCol), `got ${r2.status}`);
+let memberItemsOk = false;
+if (memberCol) {
+  const { data: memberItems } = await service.from("collection_items").select("kind,target_id").eq("collection_id", memberCol.id);
+  memberItemsOk = (memberItems ?? []).some((it) => it.target_id === "base64.encode");
+}
+ok("member's personal copy carries the item", memberItemsOk, "copy item missing");
+const { data: colAudit } = await service.from("audit_logs").select("action").eq("user_id", smokeUserId).eq("action", "team_collection_saved").gte("created_at", startTs);
+ok("team_collection_saved audit row recorded", (colAudit ?? []).length >= 1);
+r2 = await sreq("DELETE", `/api/account/teams/${tId}/collections/${colId}/items/base64.encode`, { jar, origin, csrf });
+ok("owner removes the item -> 200", r2.status === 200, `got ${r2.status} ${r2.json?.error ?? ""}`);
+r2 = await sreq("GET", `/api/account/teams/${tId}/collections/${colId}/items`, { jar, origin, csrf });
+ok("item no longer listed", !(r2.json?.items ?? []).some((it) => it.target_id === "base64.encode"), `got ${r2.status}`);
+r2 = await sreq("DELETE", `/api/account/teams/${tId}/collections/${colId}`, { jar, origin, csrf });
+ok("owner deletes the shared collection -> 200", r2.status === 200, `got ${r2.status} ${r2.json?.error ?? ""}`);
+r2 = await sreq("GET", `/api/account/teams/${tId}/collections`, { jar, origin, csrf });
+ok("shared collection no longer listed", !(r2.json?.collections ?? []).some((c) => c.id === colId), `got ${r2.status}`);
+
 // Cleanup: revoke the read-only key, delete only THIS run's usage rows.
 await revokeByHash(readOnly.keyHash);
 const { error: delErr } = await service.from("usage_records").delete().in("resource_id", ["api:v1", "api:v1:workflow"]).gte("recorded_at", startTs);
 if (smokeUserId || memberId) await service.from("usage_records").delete().in("user_id", [smokeUserId, memberId].filter(Boolean)).gte("recorded_at", startTs);
 await revokeByHash(wfKey.keyHash);
 await revokeByHash(planKey.keyHash);
+if (memberId) await service.from("collections").delete().eq("user_id", memberId);
 if (teamId) await service.from("teams").delete().eq("id", teamId);
 const { error: wfDelErr } = await service.from("saved_workflows").delete().eq("id", wfId);
 const rateKeyIds = [full.id, readOnly.id].filter(Boolean);
