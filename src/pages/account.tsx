@@ -457,13 +457,15 @@ return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Teams</
           <div className="mt-3 border-t border-zinc-100 pt-2 dark:border-zinc-800">
             <p className="text-[11px] font-bold uppercase tracking-wide text-zinc-400">Shared workflows</p>
             {(teamWfs[team.id] ?? []).length === 0 ? <p className="mt-1 text-[12px] text-zinc-500">None yet.</p> : (teamWfs[team.id] ?? []).map((wf) => (
-                            <TeamWorkflowRunBox teamId={team.id} wfId={wf.id} />
-<div key={wf.id} className="mt-1 flex items-center justify-between gap-2">
+                            <div key={wf.id}>
+<TeamWorkflowRunBox teamId={team.id} wfId={wf.id} />
+<div className="mt-1 flex items-center justify-between gap-2">
                 <span className="text-[12.5px] font-medium">{wf.name}</span>
                 <span className="flex gap-1">
                   <Btn disabled={busy} onClick={() => { if (busy) return; const copyName = `${wf.name} (team copy)`.slice(0, 100); if (myWorkflows.some((row) => row.name === copyName)) { setError(`You already have "${copyName}" in your workflows.`); return; } void act(async () => { await apiFetch(`/api/account/workflows/${wf.id}`, { method: "PUT", body: JSON.stringify({ name: copyName, description: wf.description, steps: wf.steps }) }); }); }}>Copy to mine</Btn>
                   {team.role !== "member" ? <Btn disabled={busy} onClick={() => { void act(async () => { await apiFetch(`/api/account/teams/${team.id}/workflows/${wf.id}`, { method: "DELETE" }); }); }}><Trash2 size={13} /></Btn> : null}
                 </span>
+              </div>
               </div>
             ))}
             {team.role !== "member" ? <div className="mt-2 flex gap-2">
