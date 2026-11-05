@@ -276,9 +276,27 @@ ok("owner deletes the shared workflow -> 200", r2.status === 200, `got ${r2.stat
 r2 = await sreq("GET", `/api/account/teams/${tId}/workflows`, { jar });
 ok("shared workflow no longer listed", !(r2.json?.workflows ?? []).some((w) => w.id === shareWfId));
 
+console.log("17) Team workflow run (p14: native execution + member attribution)");
+const runWfId = `smoke-team-wf-run-${stamp}`;
+r2 = await sreq("PUT", `/api/account/teams/${tId}/workflows/${runWfId}`, { jar, origin, csrf, body: { name: "Runnable smoke wf", description: "", steps: [{ operationId: "base64.encode" }, { operationId: "base64.decode" }] } });
+ok("owner shares a runnable workflow -> 200", r2.status === 200, `got ${r2.status} ${r2.json?.error ?? ""}`);
+r2 = await sreq("POST", `/api/account/teams/${tId}/workflows/${runWfId}/run`, { jar, origin, csrf, body: { input: "team-native" } });
+ok("owner runs it natively -> 200, input round-trips through 2 steps", r2.status === 200 && r2.json?.ok === true && r2.json?.output === "team-native" && r2.json?.steps?.length === 2, `got ${r2.status} ${r2.json?.error ?? ""}`);
+r2 = await sreq("POST", `/api/account/teams/${tId}/workflows/${runWfId}/run`, { jar: mJar, origin, csrf: mCsrf, body: { input: "from-member" } });
+ok("member session runs it too -> 200", r2.status === 200 && r2.json?.output === "from-member", `got ${r2.status} ${r2.json?.error ?? ""}`);
+r2 = await sreq("POST", `/api/account/teams/${tId}/workflows/${runWfId}/run`, { jar: {}, body: { input: "x" } });
+ok("run requires a session -> 401", r2.status === 401, `got ${r2.status}`);
+const { data: runUsage } = await service.from("usage_records").select("metric, resource_id").eq("user_id", memberId).eq("metric", "workflow_runs").gte("recorded_at", startTs);
+ok("run usage attributed to the clicking member (workflow_runs row)", (runUsage ?? []).some((row) => (row.resource_id ?? "") === `team-workflow:${runWfId}`));
+const { data: runAudit } = await service.from("audit_logs").select("action").eq("user_id", memberId).eq("action", "team_workflow_run").gte("created_at", startTs);
+ok("team_workflow_run audit row recorded for the member", (runAudit ?? []).length >= 1);
+r2 = await sreq("DELETE", `/api/account/teams/${tId}/workflows/${runWfId}`, { jar, origin, csrf });
+ok("owner removes the runnable shared workflow -> 200", r2.status === 200, `got ${r2.status}`);
+
 // Cleanup: revoke the read-only key, delete only THIS run's usage rows.
 await revokeByHash(readOnly.keyHash);
 const { error: delErr } = await service.from("usage_records").delete().in("resource_id", ["api:v1", "api:v1:workflow"]).gte("recorded_at", startTs);
+if (smokeUserId || memberId) await service.from("usage_records").delete().in("user_id", [smokeUserId, memberId].filter(Boolean)).gte("recorded_at", startTs);
 await revokeByHash(wfKey.keyHash);
 await revokeByHash(planKey.keyHash);
 if (teamId) await service.from("teams").delete().eq("id", teamId);
