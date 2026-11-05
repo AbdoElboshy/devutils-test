@@ -792,7 +792,7 @@ app.post("/api/account/teams/:id/collections/:colId/copy", async (req, res) => {
     let collectionId;
     if (existing.data) collectionId = existing.data.id;
     else {
-      const created = await db.from("collections").insert({ name: copyName, description: String(col.data.description ?? "").slice(0, 200) }).select("id");
+      const created = await db.from("collections").insert({ user_id: req.devutils.user.id, name: copyName, description: String(col.data.description ?? "").slice(0, 200) }).select("id");
       if (created.error) return sendError(res, created.error, "Team collection copy failed.");
       collectionId = created.data[0].id;
     }
