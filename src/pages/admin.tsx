@@ -19,7 +19,10 @@ import { Btn, ErrorCallout, Field, Panel, Select, Stat, TextInput, inputCls } fr
 import { AccountUnavailable } from "./auth";
 import { cn } from "../utils/cn";
 
-type Section = "overview" | "tools" | "categories" | "users" | "flags" | "analytics" | "audit" | "billing" | "health";
+/* p19 followup: Section is derived from the route classifier's whitelist (src/lib/routes.ts)
+   so the nav list and the URL table can never drift apart again (PR #37's miss). */
+import type { AdminSection } from "../lib/routes";
+type Section = AdminSection;
 
 const SECTIONS: { id: Section; label: string; icon: typeof Gauge; hint: string }[] = [
   { id: "overview", label: "Overview", icon: Gauge, hint: "Live counts and configuration state" },
