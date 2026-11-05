@@ -381,7 +381,7 @@ function TeamWorkflowRunBox({ teamId, wfId }: { teamId: string; wfId: string }) 
 function TeamsSection({ user }: { user: User }) {
   const [teams, setTeams] = useState<TeamRow[]>([]);
   const [name, setName] = useState("");
-  const [memberId, setMemberId] = useState("");
+  const [memberEmail, setMemberEmail] = useState("");
   const [teamWfs, setTeamWfs] = useState<Record<string, TeamWorkflowRow[]>>({});
   const [teamMembers, setTeamMembers] = useState<Record<string, TeamMemberRow[]>>({});
   const [myWorkflows, setMyWorkflows] = useState<SavedWorkflow[]>([]);
@@ -447,8 +447,8 @@ return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Teams</
             ))}
           </div>}
           {team.role !== "member" ? <div className="mt-2 flex gap-2">
-            <input type="email" className="w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-1.5 text-[13px] outline-none focus:border-emerald-500 dark:border-zinc-700" placeholder="member@example.com" value={memberId} onChange={(event) => setMemberId(event.target.value)} />
-            <Btn disabled={busy || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(memberId.trim())} onClick={() => { const email = memberId.trim(); void act(async () => { await apiFetch(`/api/account/teams/${team.id}/members`, { method: "POST", body: JSON.stringify({ email }) }); }); setMemberId(""); }}>Add</Btn>
+            <input type="email" className="w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-1.5 text-[13px] outline-none focus:border-emerald-500 dark:border-zinc-700" placeholder="member@example.com" value={memberEmail} onChange={(event) => setMemberEmail(event.target.value)} />
+            <Btn disabled={busy || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(memberEmail.trim())} onClick={() => { const email = memberEmail.trim(); void act(async () => { await apiFetch(`/api/account/teams/${team.id}/members`, { method: "POST", body: JSON.stringify({ email }) }); }); setMemberEmail(""); }}>Add</Btn>
           </div> : null}
           <div className="mt-2 flex gap-2">
             <Btn disabled={busy} onClick={() => void act(async () => { await apiFetch(`/api/account/teams/${team.id}/members/${user.id}`, { method: "DELETE" }); })}>Leave</Btn>
@@ -462,7 +462,7 @@ return <Panel className="p-5"><h2 className="text-[15px] font-extrabold">Teams</
 <div className="mt-1 flex items-center justify-between gap-2">
                 <span className="text-[12.5px] font-medium">{wf.name}</span>
                 <span className="flex gap-1">
-                  <Btn disabled={busy} onClick={() => { if (busy) return; const copyName = `${wf.name} (team copy)`.slice(0, 100); if (myWorkflows.some((row) => row.name === copyName)) { setError(`You already have "${copyName}" in your workflows.`); return; } void act(async () => { await apiFetch(`/api/account/workflows/${wf.id}`, { method: "PUT", body: JSON.stringify({ name: copyName, description: wf.description, steps: wf.steps }) }); }); }}>Copy to mine</Btn>
+                  <Btn disabled={busy} onClick={() => { if (busy) return; const copyName = `${wf.name} (team copy)`.slice(0, 100); if (myWorkflows.some((row) => row.name === copyName) && !confirm(`Overwrite your existing "${copyName}" workflow?`)) return; void act(async () => { await apiFetch(`/api/account/workflows/${wf.id}`, { method: "PUT", body: JSON.stringify({ name: copyName, description: wf.description, steps: wf.steps }) }); }); }}>Copy to mine</Btn>
                   {team.role !== "member" ? <Btn disabled={busy} onClick={() => { void act(async () => { await apiFetch(`/api/account/teams/${team.id}/workflows/${wf.id}`, { method: "DELETE" }); }); }}><Trash2 size={13} /></Btn> : null}
                 </span>
               </div>
