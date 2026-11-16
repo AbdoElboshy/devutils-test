@@ -5,7 +5,7 @@
  * itself (revokes keys, deletes its own usage rows). Prints no secrets.
  * Run: sudo node --env-file=/etc/devutils/devutils.env scripts/smoke-api-v1.mjs
  */
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { execSync } from "node:child_process";
 import { createClient } from "@supabase/supabase-js";
 
@@ -411,6 +411,39 @@ r = await req("GET", "/api/admin/billing");
 ok("admin billing requires an admin session", r.status === 401 || r.status === 403, `got ${r.status}`);
 r2 = await sreq("GET", "/api/admin/billing", { jar, origin, csrf });
 ok("admin billing lists our ledger rows", r2.status === 200 && Array.isArray(r2.json) && r2.json.some((e) => e.user_id === smokeUserId && e.new_plan_id === "pro"), `got ${r2.status} ${JSON.stringify(r2.json?.slice?.(0, 3) ?? [])}`);
+
+console.log("22) Paddle billing webhook");
+r = await req("GET", "/api/account/billing/config");
+ok("config requires session -> 401", r.status === 401, `got ${r.status}`);
+const paddleSecret = process.env.PADDLE_WEBHOOK_SECRET;
+const proPrice = process.env.PADDLE_PRICE_PRO_MONTHLY;
+if (!paddleSecret || !proPrice || !smokeUserId) {
+  ok("paddle env + smoke user present", false, `secret=${Boolean(paddleSecret)} price=${Boolean(proPrice)} user=${Boolean(smokeUserId)}`);
+} else {
+  const sig = (raw, at) => `ts=${at};h1=${createHmac("sha256", paddleSecret).update(`${at}:${raw}`).digest("hex")}`;
+  const activatedBody = JSON.stringify({ event_id: "evt_smoke_" + randomBytes(8).toString("hex"), event_type: "subscription.activated", occurred_at: new Date().toISOString(), data: { id: "sub_smoke_1", customer_id: "ctm_smoke", status: "active", custom_data: { user_id: smokeUserId }, items: [{ price: { id: proPrice } }], current_billing_period: { ends_at: new Date(Date.now() + 30 * 864e5).toISOString() } } });
+  const post = (body, header) => fetch(BASE + "/api/billing/paddle/webhook", { method: "POST", headers: { "Content-Type": "application/json", ...(header ? { "Paddle-Signature": header } : {}) }, body });
+  let res = await post(activatedBody, null);
+  ok("webhook without signature -> 401", res.status === 401, `got ${res.status}`);
+  res = await post(activatedBody, sig("{}", Math.floor(Date.now() / 1000)));
+  ok("webhook with wrong signature -> 401", res.status === 401, `got ${res.status}`);
+  res = await post(activatedBody, sig(activatedBody, Math.floor(Date.now() / 1000)));
+  const activatedJson = await res.json();
+  ok("valid activated event -> 200 ok", res.status === 200 && activatedJson?.ok === true, `got ${res.status} ${JSON.stringify(activatedJson)}`);
+  const prof = await service.from("profiles").select("plan_id").eq("user_id", smokeUserId).single();
+  ok("profile plan_id -> pro", prof.data?.plan_id === "pro", `got ${prof.data?.plan_id}`);
+  const led = await service.from("billing_events").select("id,source,new_plan_id").eq("user_id", smokeUserId).eq("source", "paddle");
+  ok("ledger row recorded with source paddle", (led.data ?? []).some((e) => e.new_plan_id === "pro"), JSON.stringify(led.data ?? []).slice(0, 120));
+  res = await post(activatedBody, sig(activatedBody, Math.floor(Date.now() / 1000)));
+  const led2 = await service.from("billing_events").select("id", { count: "exact", head: true }).eq("user_id", smokeUserId).eq("source", "paddle");
+  ok("duplicate event ignored (still 1 paddle ledger row)", res.status === 200 && Number(led2.count ?? 0) === 1, `status ${res.status} rows ${led2.count}`);
+  const canceledBody = JSON.stringify({ event_id: "evt_smoke_cancel_" + randomBytes(8).toString("hex"), event_type: "subscription.canceled", occurred_at: new Date().toISOString(), data: { id: "sub_smoke_1", status: "canceled", custom_data: { user_id: smokeUserId }, items: [{ price: { id: proPrice } }] } });
+  res = await post(canceledBody, sig(canceledBody, Math.floor(Date.now() / 1000)));
+  ok("canceled event -> 200", res.status === 200, `got ${res.status}`);
+  const prof2 = await service.from("profiles").select("plan_id").eq("user_id", smokeUserId).single();
+  ok("profile plan_id back to free", prof2.data?.plan_id === "free", `got ${prof2.data?.plan_id}`);
+  await service.from("paddle_webhook_events").delete().like("event_id", "evt_smoke_%");
+}
 
 // Cleanup: revoke the read-only key, delete only THIS run's usage rows.
 await revokeByHash(readOnly.keyHash);
