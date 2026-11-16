@@ -112,7 +112,7 @@ app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false 
 app.use((_req, res, next) => {
   const nonce = randomBytes(18).toString("base64");
   res.locals.cspNonce = nonce;
-  res.setHeader("Content-Security-Policy", `default-src 'self'; script-src 'self' 'nonce-${nonce}' https://cdn.paddle.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: ${SUPABASE_ORIGIN}; connect-src 'self' https://cloudflare-dns.com https://dns.google https://*.paddle.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; frame-src https://checkout.paddle.com https://sandbox-checkout.paddle.com`);
+  res.setHeader("Content-Security-Policy", `default-src 'self'; script-src 'self' 'nonce-${nonce}' https://*.paddle.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://*.paddle.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: ${SUPABASE_ORIGIN} https://*.paddle.com; connect-src 'self' https://cloudflare-dns.com https://dns.google https://*.paddle.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; frame-src https://*.paddle.com`);
   res.setHeader("Vary", "Origin");
   next();
 });
