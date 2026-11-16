@@ -1057,16 +1057,23 @@ app.post("/api/billing/paddle/webhook", express.raw({ type: "application/json", 
       const planId = status === "canceled" || event.event_type === "subscription.canceled" ? "free" : planFromPrice;
       if (planId) {
         const before = await service.from("profiles").select("plan_id").eq("user_id", userId).maybeSingle();
-        const upd = await service.from("profiles").update({ plan_id: planId }).eq("user_id", userId);
+        const upd = await service.from("profiles").update({ plan_id: planId }).eq("user_id", userId).select("user_id");
         if (upd.error) { console.error("[DevUtils] paddle profile update failed:", upd.error.message); return res.status(500).json({ error: "Plan update failed." }); }
-        const { data: existingSub } = await service.from("subscriptions").select("id").eq("user_id", userId).maybeSingle();
+        if (!upd.data?.length) { console.error(`[DevUtils] paddle profile update matched 0 rows (user ${userId.slice(0, 8)}…).`); return res.status(500).json({ error: "Plan update failed." }); }
         const subRow = { provider: "paddle", provider_customer_id: data.customer_id ?? null, provider_subscription_id: data.id ?? null, plan_id: planId, status, current_period_end: data.current_billing_period?.ends_at ?? null, updated_at: new Date().toISOString() };
-        const subWrite = existingSub
+        const existingRes = await service.from("subscriptions").select("id").eq("user_id", userId).maybeSingle();
+        let subWrite = existingRes.data
           ? await service.from("subscriptions").update(subRow).eq("user_id", userId)
           : await service.from("subscriptions").insert({ ...subRow, id: randomUUID(), user_id: userId, created_at: new Date().toISOString() });
+        if (subWrite.error?.code === "23505") // lost insert race with a concurrent webhook event
+          subWrite = await service.from("subscriptions").update(subRow).eq("user_id", userId);
         if (subWrite.error) console.error("[DevUtils] paddle subscription row write failed:", subWrite.error.message);
-        const led = await service.from("billing_events").insert({ user_id: userId, kind: "plan_change", old_plan_id: before.data?.plan_id ?? null, new_plan_id: planId, source: "paddle", note: `Paddle subscription ${status} (${planId}).`, recorded_by: userId });
-        if (led.error) console.error("[DevUtils] paddle ledger write failed:", led.error.message);
+        if (before.data?.plan_id !== planId) {
+          const led = await service.from("billing_events").insert({ user_id: userId, kind: "plan_change", old_plan_id: before.data?.plan_id ?? null, new_plan_id: planId, source: "paddle", note: `Paddle subscription ${status} (${planId}).`, recorded_by: userId });
+          if (led.error) console.error("[DevUtils] paddle ledger write failed:", led.error.message);
+        } else {
+          console.log(`[DevUtils] paddle ${event.event_type}: plan already ${planId}, ledger row skipped.`);
+        }
         console.log(`[DevUtils] paddle ${event.event_type}: user ${userId.slice(0, 8)}… -> ${planId} (${status})`);
       }
     }
