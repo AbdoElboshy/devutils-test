@@ -1060,6 +1060,9 @@ app.post("/api/billing/paddle/webhook", express.raw({ type: "application/json", 
         const upd = await service.from("profiles").update({ plan_id: planId }).eq("user_id", userId).select("user_id");
         if (upd.error) { console.error("[DevUtils] paddle profile update failed:", upd.error.message); return res.status(500).json({ error: "Plan update failed." }); }
         if (!upd.data?.length) { console.error(`[DevUtils] paddle profile update matched 0 rows (user ${userId.slice(0, 8)}…).`); return res.status(500).json({ error: "Plan update failed." }); }
+        /* p21.3: keep app_metadata in sync (the admin plan route does this; the UI reads plan from session metadata). */
+        const meta = await service.auth.admin.updateUserById(userId, { app_metadata: { plan_id: planId } });
+        if (meta.error) console.error("[DevUtils] paddle plan metadata update failed:", meta.error.message);
         const subRow = { provider: "paddle", provider_customer_id: data.customer_id ?? null, provider_subscription_id: data.id ?? null, plan_id: planId, status, current_period_end: data.current_billing_period?.ends_at ?? null, updated_at: new Date().toISOString() };
         const existingRes = await service.from("subscriptions").select("id").eq("user_id", userId).maybeSingle();
         let subWrite = existingRes.data
