@@ -147,8 +147,9 @@ function clearSessionCookies(res) {
   res.clearCookie(COOKIE_REFRESH, cookieBase);
   res.clearCookie(COOKIE_REMEMBER, cookieBase);
 }
-function safeUser(user) {
-  const plan = ["free", "pro", "team", "enterprise"].includes(user.app_metadata?.plan_id) ? user.app_metadata.plan_id : "free";
+function safeUser(user, planOverride) {
+  const raw = planOverride ?? user.app_metadata?.plan_id;
+  const plan = ["free", "pro", "team", "enterprise"].includes(raw) ? raw : "free";
   return {
     id: user.id,
     email: user.email ?? null,
@@ -158,6 +159,15 @@ function safeUser(user) {
     planId: plan,
     createdAt: user.created_at,
   };
+}
+/* p22.1: profiles.plan_id is the plan of record (the same column the gateway reads). Session
+   metadata only changes on the next token refresh, so every user payload is stamped from profiles. */
+async function planFromProfiles(userId) {
+  try {
+    const { data, error } = await service.from("profiles").select("plan_id").eq("user_id", userId).maybeSingle();
+    if (error || !data) return null; // fall back to session metadata (signup race, missing row)
+    return data.plan_id;
+  } catch { return null; }
 }
 function requireOrigin(req, res, next) {
   const allowed = isAllowedOrigin({ origin: req.get("origin"), host: req.get("host"), appOrigin: APP_URL.origin, extraOrigins: EXTRA_ORIGINS });
@@ -358,7 +368,7 @@ app.post("/api/auth/signup", authLimit, requireOrigin, requireCsrf, async (req, 
     }
     if (data.session) setSessionCookies(res, data.session, true);
     await audit(data.user?.id ?? null, "logged_in", { event: "signup" }).catch(() => undefined);
-    res.status(201).json({ user: data.user ? safeUser(data.user) : null, verificationRequired: !data.session, message: "Check your email to verify your account." });
+    res.status(201).json({ user: data.user ? safeUser(data.user, await planFromProfiles(data.user.id)) : null, verificationRequired: !data.session, message: "Check your email to verify your account." });
   } catch (error) {
     sendError(res, error, "Signup could not be completed.");
   }
@@ -373,7 +383,7 @@ app.post("/api/auth/login", loginLimit, requireOrigin, requireCsrf, async (req, 
     if (error || !data.session || !data.user) return res.status(401).json({ error: "Invalid email or password." });
     setSessionCookies(res, data.session, remember);
     await audit(data.user.id, "logged_in", {});
-    res.json({ user: safeUser(data.user) });
+    res.json({ user: safeUser(data.user, await planFromProfiles(data.user.id)) });
   } catch (error) {
     sendError(res, error, "Login failed.");
   }
@@ -381,7 +391,7 @@ app.post("/api/auth/login", loginLimit, requireOrigin, requireCsrf, async (req, 
 
 app.get("/api/auth/me", authReadLimit, async (req, res) => {
   const session = await currentSession(req, res).catch(() => null);
-  res.json({ user: session ? safeUser(session.user) : null });
+  res.json({ user: session ? safeUser(session.user, await planFromProfiles(session.user.id)) : null });
 });
 
 app.get("/api/auth/session", requireSession, (req, res) => {
