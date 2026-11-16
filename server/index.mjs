@@ -6,7 +6,7 @@ import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import { createClient } from "@supabase/supabase-js";
 import WebSocket from "ws";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual, randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,6 +65,20 @@ const baseRegistry = JSON.parse(readFileSync(path.join(root, "registry.generated
 const APP_URL = new URL(process.env.APP_URL);
 const SUPABASE_ORIGIN = new URL(process.env.SUPABASE_URL).origin;
 const EXTRA_ORIGINS = parseExtraOrigins(process.env.ALLOWED_ORIGINS);
+
+/* p21: Paddle billing — env-gated. Absent vars disable every billing surface. */
+const PADDLE_CLIENT_TOKEN = process.env.PADDLE_CLIENT_TOKEN ?? "";
+const PADDLE_WEBHOOK_SECRET = process.env.PADDLE_WEBHOOK_SECRET ?? "";
+const PADDLE_ENV = process.env.PADDLE_ENV === "live" ? "live" : "sandbox";
+const PADDLE_PRICES = {
+  [process.env.PADDLE_PRICE_PRO_MONTHLY ?? ""]: "pro",
+  [process.env.PADDLE_PRICE_PRO_YEARLY ?? ""]: "pro",
+  [process.env.PADDLE_PRICE_TEAM_MONTHLY ?? ""]: "team",
+  [process.env.PADDLE_PRICE_TEAM_YEARLY ?? ""]: "team",
+};
+const PADDLE_BILLING_CONFIGURED = Boolean(PADDLE_CLIENT_TOKEN) && Boolean(PADDLE_WEBHOOK_SECRET)
+  && Boolean(process.env.PADDLE_PRICE_PRO_MONTHLY) && Boolean(process.env.PADDLE_PRICE_PRO_YEARLY)
+  && Boolean(process.env.PADDLE_PRICE_TEAM_MONTHLY) && Boolean(process.env.PADDLE_PRICE_TEAM_YEARLY);
 const PORT = Number(process.env.PORT ?? 3000);
 
 const COOKIE_ACCESS = "du_access";
@@ -98,7 +112,7 @@ app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false 
 app.use((_req, res, next) => {
   const nonce = randomBytes(18).toString("base64");
   res.locals.cspNonce = nonce;
-  res.setHeader("Content-Security-Policy", `default-src 'self'; script-src 'self' 'nonce-${nonce}'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: ${SUPABASE_ORIGIN}; connect-src 'self' https://cloudflare-dns.com https://dns.google; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'`);
+  res.setHeader("Content-Security-Policy", `default-src 'self'; script-src 'self' 'nonce-${nonce}' https://cdn.paddle.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: ${SUPABASE_ORIGIN}; connect-src 'self' https://cloudflare-dns.com https://dns.google https://*.paddle.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; frame-src https://checkout.paddle.com https://sandbox-checkout.paddle.com`);
   res.setHeader("Vary", "Origin");
   next();
 });
@@ -108,6 +122,7 @@ app.use((req, res, next) => {
   // operation inputs may be top-level JSON primitives (strings, numbers,
   // booleans) — e.g. base64.encode takes a raw JSON string body.
   if (req.path === "/api/account/avatar") return next(); // raw image bytes, parsed by express.raw in the route
+  if (req.path === "/api/billing/paddle/webhook") return next(); // p21: Paddle signature covers the raw bytes
   express.json({ limit: "1mb", strict: !req.path.startsWith("/api/v1/") })(req, res, next);
 });
 app.use(cookieParser());
@@ -987,6 +1002,76 @@ app.post("/api/account/teams/:id/owner", async (req, res) => {
     await audit(req.devutils.user.id, "team_ownership_transferred", { team_id: teamId, to_user_id: targetId });
     res.json({ ok: true });
   } catch (error) { sendError(res, error, "Ownership transfer failed."); }
+});
+
+/* p21: Paddle checkout configuration for the signed-in user. */
+app.get("/api/account/billing/config", async (req, res) => {
+  try {
+    if (!PADDLE_BILLING_CONFIGURED) return res.json({ configured: false });
+    res.json({
+      configured: true,
+      environment: PADDLE_ENV,
+      clientToken: PADDLE_CLIENT_TOKEN,
+      prices: {
+        proMonthly: process.env.PADDLE_PRICE_PRO_MONTHLY,
+        proYearly: process.env.PADDLE_PRICE_PRO_YEARLY,
+        teamMonthly: process.env.PADDLE_PRICE_TEAM_MONTHLY,
+        teamYearly: process.env.PADDLE_PRICE_TEAM_YEARLY,
+      },
+    });
+  } catch (error) { sendError(res, error, "Billing configuration unavailable."); }
+});
+
+/* p21: Paddle webhook — public, raw-body, HMAC-SHA256 verified, idempotent by event id. */
+app.post("/api/billing/paddle/webhook", express.raw({ type: "application/json", limit: "1mb" }), async (req, res) => {
+  try {
+    if (!PADDLE_WEBHOOK_SECRET) return res.status(503).json({ error: "Billing is not configured." });
+    const header = String(req.headers["paddle-signature"] ?? "");
+    const parts = Object.fromEntries(header.split(";").map((piece) => piece.split("=")).filter((pair) => pair.length === 2));
+    const ts = Number(parts.ts); const h1 = parts.h1 ?? "";
+    if (!Number.isFinite(ts) || !h1) return res.status(401).json({ error: "Invalid signature." });
+    if (Math.abs(Date.now() / 1000 - ts) > 300) return res.status(401).json({ error: "Stale signature." });
+    const raw = req.body.toString("utf8");
+    const want = Buffer.from(createHmac("sha256", PADDLE_WEBHOOK_SECRET).update(`${ts}:${raw}`).digest("hex"), "utf8");
+    const given = Buffer.from(h1, "utf8");
+    if (given.length !== want.length || !timingSafeEqual(given, want)) return res.status(401).json({ error: "Invalid signature." });
+    const event = JSON.parse(raw);
+    if (!event?.event_id || typeof event.event_type !== "string") return res.status(400).json({ error: "Malformed event." });
+    const { error: dupError } = await service.from("paddle_webhook_events").insert({
+      event_id: event.event_id, event_type: event.event_type, occurred_at: event.occurred_at ?? null,
+      payload: { status: event?.data?.status ?? null, sub: event?.data?.id ?? null },
+    });
+    if (dupError) {
+      if (dupError.code === "23505") return res.json({ ok: true, duplicate: true });
+      console.error("[DevUtils] paddle dedupe write failed:", dupError.message);
+      return res.status(500).json({ error: "Webhook storage failed." });
+    }
+    const data = event.data ?? {};
+    const userId = typeof data.custom_data?.user_id === "string" ? data.custom_data.user_id : null;
+    if (!userId) { console.log(`[DevUtils] paddle ${event.event_type}: no user_id in custom_data, ignored.`); return res.json({ ok: true, ignored: "no user_id" }); }
+    if (event.event_type.startsWith("subscription.")) {
+      const priceId = data.items?.[0]?.price?.id ?? null;
+      const planFromPrice = priceId ? PADDLE_PRICES[priceId] ?? null : null;
+      const rawStatus = String(data.status ?? "").replace(/-/g, "_");
+      const status = ["trialing", "active", "past_due", "canceled"].includes(rawStatus) ? rawStatus : "active";
+      const planId = status === "canceled" || event.event_type === "subscription.canceled" ? "free" : planFromPrice;
+      if (planId) {
+        const before = await service.from("profiles").select("plan_id").eq("user_id", userId).maybeSingle();
+        const upd = await service.from("profiles").update({ plan_id: planId }).eq("user_id", userId);
+        if (upd.error) { console.error("[DevUtils] paddle profile update failed:", upd.error.message); return res.status(500).json({ error: "Plan update failed." }); }
+        const { data: existingSub } = await service.from("subscriptions").select("id").eq("user_id", userId).maybeSingle();
+        const subRow = { provider: "paddle", provider_customer_id: data.customer_id ?? null, provider_subscription_id: data.id ?? null, plan_id: planId, status, current_period_end: data.current_billing_period?.ends_at ?? null, updated_at: new Date().toISOString() };
+        const subWrite = existingSub
+          ? await service.from("subscriptions").update(subRow).eq("user_id", userId)
+          : await service.from("subscriptions").insert({ ...subRow, id: randomUUID(), user_id: userId, created_at: new Date().toISOString() });
+        if (subWrite.error) console.error("[DevUtils] paddle subscription row write failed:", subWrite.error.message);
+        const led = await service.from("billing_events").insert({ user_id: userId, kind: "plan_change", old_plan_id: before.data?.plan_id ?? null, new_plan_id: planId, source: "paddle", note: `Paddle subscription ${status} (${planId}).`, recorded_by: userId });
+        if (led.error) console.error("[DevUtils] paddle ledger write failed:", led.error.message);
+        console.log(`[DevUtils] paddle ${event.event_type}: user ${userId.slice(0, 8)}… -> ${planId} (${status})`);
+      }
+    }
+    res.json({ ok: true });
+  } catch (error) { console.error("[DevUtils] paddle webhook error:", error instanceof Error ? error.message : String(error)); res.status(500).json({ error: "Webhook processing failed." }); }
 });
 
 /* p18: provider-independent billing summary + plan history. */
