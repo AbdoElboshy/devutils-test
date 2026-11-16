@@ -442,6 +442,18 @@ if (!paddleSecret || !proPrice || !smokeUserId) {
   ok("canceled event -> 200", res.status === 200, `got ${res.status}`);
   const prof2 = await service.from("profiles").select("plan_id").eq("user_id", smokeUserId).single();
   ok("profile plan_id back to free", prof2.data?.plan_id === "free", `got ${prof2.data?.plan_id}`);
+  /* p22.1: profiles.plan_id is the plan of record even when session metadata disagrees. */
+  const metaFetch = await service.auth.admin.getUserById(smokeUserId);
+  const metaPlan = ["free", "pro", "team", "enterprise"].includes(metaFetch.data?.user?.app_metadata?.plan_id) ? metaFetch.data.user.app_metadata.plan_id : "free";
+  const driftPlan = metaPlan === "enterprise" ? "pro" : "enterprise";
+  await service.from("profiles").update({ plan_id: driftPlan }).eq("user_id", smokeUserId);
+  let meR = await sreq("GET", "/api/auth/me", { jar });
+  if (!(meR.status === 200 && meR.json?.user?.id === smokeUserId)) { /* jar may hold another session; re-login the smoke user */
+    await sreq("POST", "/api/auth/login", { jar, origin, csrf, body: { email: smokeEmail, password: smokePassword } });
+    meR = await sreq("GET", "/api/auth/me", { jar });
+  }
+  ok("me serves the profiles plan when metadata disagrees (p22.1)", meR.status === 200 && meR.json?.user?.planId === driftPlan, `meta=${metaPlan} profiles=${driftPlan} got ${meR.json?.user?.planId ?? meR.status}`);
+  await service.from("profiles").update({ plan_id: "free" }).eq("user_id", smokeUserId);
   await service.from("paddle_webhook_events").delete().like("event_id", "evt_smoke_%");
 }
 
