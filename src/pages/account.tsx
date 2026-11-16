@@ -25,6 +25,51 @@ const sections: { id: AccountSection; label: string; icon: typeof Gauge }[] = [
 
 const emptyUsage = (): UsageSummary => ({ toolRuns: 0, workflowRuns: 0, apiRequests: 0, integrationCalls: 0, periodStart: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString() });
 
+/* p21: env-gated Paddle checkout. Renders the original honesty note when billing is unconfigured. */
+type PaddleBillingConfig = { configured: boolean; environment?: string; clientToken?: string; prices?: { proMonthly: string; proYearly: string; teamMonthly: string; teamYearly: string } };
+type PaddleGlobal = { Paddle?: { Environment?: { set: (e: string) => void }; Initialized?: boolean; Initialize?: (o: { token: string }) => void; Checkout?: { open: (o: Record<string, unknown>) => void } } };
+
+function PaddleCheckoutPanel() {
+  const auth = useAuth();
+  const [cfg, setCfg] = useState<PaddleBillingConfig | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch<PaddleBillingConfig>("/api/account/billing/config").then((data) => { if (!cancelled) setCfg(data); }).catch(() => { if (!cancelled) setCfg({ configured: false }); });
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => {
+    if (!cfg?.configured) return;
+    const init = () => {
+      const P = (window as unknown as PaddleGlobal).Paddle;
+      if (!P?.Initialize) return;
+      if (cfg.environment === "sandbox") P.Environment?.set("sandbox");
+      if (!P.Initialized) P.Initialize({ token: cfg.clientToken ?? "" });
+    };
+    if ((window as unknown as PaddleGlobal).Paddle) { init(); return; }
+    const script = document.createElement("script");
+    script.src = "https://cdn.paddle.com/paddle/v2/paddle.js";
+    script.async = true;
+    script.onload = init;
+    document.head.appendChild(script);
+  }, [cfg]);
+  if (!cfg?.configured || !cfg.prices) return <p className="mt-4 rounded-xl border border-dashed border-zinc-300 p-4 text-[13px] leading-relaxed text-zinc-500 dark:border-zinc-700">No payment provider is configured, so DevUtils presents no checkout, cancellation, or pricing actions that cannot work. Plan changes are applied by an administrator, recorded in the ledger above, and take effect immediately. The ledger is provider-independent and ready to feed a Stripe, Paddle, or Lemon Squeezy integration.</p>;
+  const start = (priceId: string) => {
+    const P = (window as unknown as PaddleGlobal).Paddle;
+    if (!P?.Checkout) return;
+    P.Checkout.open({ items: [{ priceId, quantity: 1 }], customData: { user_id: auth.user?.id } });
+  };
+  const items: [string, string][] = [["Pro — $9/month", cfg.prices.proMonthly], ["Pro — $90/year", cfg.prices.proYearly], ["Team — $39/month", cfg.prices.teamMonthly], ["Team — $390/year", cfg.prices.teamYearly]];
+  return (
+    <div className="mt-4 space-y-3">
+      <p className="text-[13px] font-semibold">Upgrade — checkout handled by Paddle (merchant of record)</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {items.map(([label, priceId]) => <Btn key={priceId} onClick={() => start(priceId)}>{label}</Btn>)}
+      </div>
+      <p className="text-[12px] leading-relaxed text-zinc-500">Payment, invoicing, and taxes are handled by Paddle. Your plan updates automatically once payment completes; the ledger above records every change.</p>
+    </div>
+  );
+}
+
 export function AccountPage({ section, onNav }: { section: AccountSection; onNav: (route: string) => void }) {
   const auth = useAuth();
   const [favorites, setFavorites] = useState<Favorite[]>([]);
@@ -589,7 +634,7 @@ function BillingSection({ plan, apiLimit }: { plan: string; apiLimit: number | n
         <span className="text-[11.5px] text-zinc-400">{new Date(e.created_at).toLocaleString()}</span>
       </div>
     ))}</div>}
-    <p className="mt-4 rounded-xl border border-dashed border-zinc-300 p-4 text-[13px] leading-relaxed text-zinc-500 dark:border-zinc-700">No payment provider is configured, so DevUtils presents no checkout, cancellation, or pricing actions that cannot work. Plan changes are applied by an administrator, recorded in the ledger above, and take effect immediately. The ledger is provider-independent and ready to feed a Stripe, Paddle, or Lemon Squeezy integration.</p>
+    <PaddleCheckoutPanel />
   </Panel>;}
 
 function SettingsSection({ profile, onNav }: { profile: Profile | null; onNav: (route: string) => void }) {
