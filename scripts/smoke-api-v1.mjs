@@ -454,6 +454,22 @@ if (!paddleSecret || !proPrice || !smokeUserId) {
   }
   ok("me serves the profiles plan when metadata disagrees (p22.1)", meR.status === 200 && meR.json?.user?.planId === driftPlan, `meta=${metaPlan} profiles=${driftPlan} got ${meR.json?.user?.planId ?? meR.status}`);
   await service.from("profiles").update({ plan_id: "free" }).eq("user_id", smokeUserId);
+  /* p22.2: parallel webhook events must converge — lock for the p21.2 insert-race fix.
+     Two events for the same user arrive simultaneously; the 23505 guard must converge them
+     into exactly one subscriptions row. Ledger may gain 1-2 rows (both handlers can read
+     before=free concurrently) — that window is asserted, not pretended away. */
+  await service.from("subscriptions").delete().eq("user_id", smokeUserId);
+  const ledPro = async () => { const r = await service.from("billing_events").select("id", { count: "exact", head: true }).eq("user_id", smokeUserId).eq("source", "paddle").eq("new_plan_id", "pro"); return Number(r.count ?? 0); };
+  const proBefore = await ledPro();
+  const mk = (type) => JSON.stringify({ event_id: "evt_smoke_par_" + randomBytes(8).toString("hex"), event_type: "subscription." + type, occurred_at: new Date().toISOString(), data: { id: "sub_smoke_1", customer_id: "ctm_smoke", status: "active", custom_data: { user_id: smokeUserId }, items: [{ price: { id: proPrice } }], current_billing_period: { ends_at: new Date(Date.now() + 30 * 864e5).toISOString() } } });
+  const parCreated = mk("created"), parActivated = mk("activated");
+  const at = Math.floor(Date.now() / 1000);
+  const [rc, ra] = await Promise.all([post(parCreated, sig(parCreated, at)), post(parActivated, sig(parActivated, at))]);
+  ok("parallel created+activated both -> 200 (p22.2)", rc.status === 200 && ra.status === 200, `got ${rc.status}/${ra.status}`);
+  const subs = await service.from("subscriptions").select("plan_id,status").eq("user_id", smokeUserId);
+  ok("race converged: exactly one subscriptions row, pro/active", subs.data?.length === 1 && subs.data[0].plan_id === "pro" && subs.data[0].status === "active", `rows=${subs.data?.length} plan=${subs.data?.[0]?.plan_id} status=${subs.data?.[0]?.status}`);
+  const proAfter = await ledPro();
+  ok("ledger under race: 1-2 new pro rows (windowed)", proAfter >= proBefore + 1 && proAfter <= proBefore + 2, `before=${proBefore} after=${proAfter}`);
   await service.from("paddle_webhook_events").delete().like("event_id", "evt_smoke_%");
 }
 
